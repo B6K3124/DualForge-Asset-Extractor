@@ -22,7 +22,7 @@ def _build_metadata(version: int = 31, literals: list[bytes] | None = None) -> b
     Section pointers are file offsets, matching the real format.
     """
     literals = literals or [b"Hello", b"world", b"unity.games", b"\x00\xff"]
-    entries = b"".join(struct.pack("<II", len(l), sum(len(x) for x in literals[:i])) for i, l in enumerate(literals))
+    entries = b"".join(struct.pack("<II", len(lit), sum(len(x) for x in literals[:i])) for i, lit in enumerate(literals))
     prefix = 8 + 32  # header + 4 section-pair rows below
     literal_off = prefix
     data_off = literal_off + len(entries)

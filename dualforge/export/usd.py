@@ -173,7 +173,7 @@ def _write_material_template(lines: List[str], scene: str, xform: str, mesh_name
     lines.append("                float inputs:metallic = 0")
     lines.append("                float inputs:roughness = 1")
     lines.append("            }")
-    lines.append(f'            def Shader "diffuseTexture"')
+    lines.append('            def Shader "diffuseTexture"')
     lines.append("            {")
     lines.append('                uniform token info:id = "UsdUVTexture"')
     lines.append(f"                asset inputs:file = @{texture_file}@")

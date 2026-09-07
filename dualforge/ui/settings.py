@@ -149,6 +149,13 @@ class SettingsDialog(QDialog):
             ("Sprite", "Sprite format"),
             ("AudioClip", "Audio format"),
             ("Mesh", "Mesh format"),
+            ("AnimationClip", "Animation format"),
+            ("Cubemap", "Cubemap format"),
+            ("VideoClip", "Video format"),
+            ("SpriteAtlas", "Sprite atlas format"),
+            ("AnimatorController", "Animator format"),
+            ("Avatar", "Avatar format"),
+            ("LightmapData", "Lightmap format"),
         ):
             combo = QComboBox()
             for choice in format_choices(type_name):

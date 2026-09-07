@@ -6,15 +6,14 @@
 Browse, preview, and export textures, meshes, audio, animations, and more — with full support for
 encrypted archives, compressed bundles, and a built-in hex inspector for everything else.
 
-![engine](https://img.shields.io/badge/engine-Unity%20%2F%20Unreal-orange?style=for-the-badge) ![platform](https://img.shields.io/badge/platform-Windows-blueviolet?style=for-the-badge) ![python](https://img.shields.io/badge/python-3.10%2B-yellow?style=for-the-badge) ![license](https://img.shields.io/badge/license-Proprietary-red?style=for-the-badge)
+![engine](https://img.shields.io/badge/engine-Unity%20%2F%20Unreal-orange?style=for-the-badge) ![platform](https://img.shields.io/badge/platform-Windows-blueviolet?style=for-the-badge) ![python](https://img.shields.io/badge/python-3.10%2B-yellow?style=for-the-badge) ![license](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 
 > DualForge is **free to use**. Decryption and decompression happen entirely in-memory —
 > it never patches, modifies, or redistributes game files or third-party DLLs.
 
-<!-- TODO(b6k): add a GUI screenshot for the hero section
-![DualForge asset browser](docs/screenshots/asset-browser.png)
-A 1200x630 crop will also double as the repo's social-preview image.
--->
+![DualForge asset browser](docs/screenshots/hero.png)
+
+*Shoot a fresh hero with any game archive: `python scripts/screenshot.py <archive>` (renders offscreen, no window needed).*
 
 ---
 
@@ -76,7 +75,7 @@ dist\DualForge.exe      # from the build
 | Find keys in a game binary | **Tools ▸ Ghidra Key Hunt** |
 | View per-type file statistics | **View ▸ Asset Statistics** |
 | Switch dark / light theme | **View ▸ Theme** |
-| Configure export formats (PNG/JPG/DDS/glTF/USD/…) | **File ▸ Settings** |
+| Configure export formats (PNG/JPG/DDS/glTF/FBX/USD/JSON/video…) | **File ▸ Settings** |
 
 ### CLI
 
@@ -87,8 +86,17 @@ python main.py detect "game\Content\Paks\pakchunk0-Windows.pak"
 # Extract all assets from a Unity bundle
 python main.py extract "game_Data\sharedassets0.assets" -o out
 
-# Extract with a per-type format override
+# Extract with a format override (applied to every type that supports it)
 python main.py extract "game_Data\sharedassets0.assets" -o out --format jpg
+
+# Extract only certain Unity types, e.g. skinned meshes + animations as FBX
+python main.py extract "game_Data\sharedassets0.assets" -o out --types Mesh AnimationClip --format fbx
+
+# Export Cubemaps (one PNG per face) and VideoClips (original container)
+python main.py extract "game_Data\sharedassets0.assets" -o out --types Cubemap VideoClip
+
+# Export an AnimatorController / Avatar / LightmapData as JSON
+python main.py extract "game_Data\sharedassets0.assets" -o out --types AnimatorController Avatar LightmapData
 
 # Extract from an Unreal IoStore
 python main.py extract "game\Content\Paks\pakchunk0-Windows.utoc" -o out
@@ -137,7 +145,8 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 | Generate `.usmap` from running game | ✅ | – | – | – | – |
 | Ghidra key hunt | ✅ | – | – | – | – |
 | Mesh / audio / texture / text previews | ✅ | partial | ✅ | ✅ | limited |
-| Skeleton + animation export (glTF) | ✅ | ✅ | ✅ | limited | limited |
+| Skeleton + animation export (glTF / FBX) | ✅ | ✅ | ✅ | ✅ | limited |
+| Cubemaps / VideoClips / SpriteAtlases / Animators / Avatars | ✅ | – | – | ✅ | limited |
 | Property inspector (MonoBehaviour) | ✅ | ✅ | ✅ | ✅ | limited |
 | **Write-back / repack** | ✅ | – | ✅ | – | – |
 | **USD world export** | ✅ | partial | – | partial | – |
@@ -154,8 +163,13 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 - **Encrypted archives** — multi-key AES with per-game scheme support; keys from manual entry, FModel import, or community sync.
 - **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
 - **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
+- **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
 - **3D preview** — wireframe + solid mesh viewer with skeleton overlay.
+- **FBX export** — skinned meshes with skeletons, morph targets (BlendShapes) and animation clips, as **FBX 7.4 binary** (verified importing cleanly into Blender 5.2); ASCII still available via `DUALFORGE_FBX_ASCII=1`.
 - **Audio preview** — waveform + inline playback (WAV/OGG/FLAC/raw, vgmstream for `.wem`).
+- **Videos** — `VideoClip` / `MovieTexture` streamed back to their original container (MP4/MOV/WebM/…).
+- **Sprite atlases** — every packed sprite exported individually.
+- **Asset metadata** — `AnimatorController`, `Avatar`, `LightmapData` exported as readable JSON.
 - **Write-back** — replace textures, fonts, and text assets, then save a new archive.
 - **Locales** — `.locres` dump / edit / write-back with UTF-16 support.
 - **Full hex inspector** — raw bytes for anything without a dedicated viewer.
@@ -166,11 +180,15 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 
 ## Supported formats
 
-- **Archives**: Unreal `.pak`, IoStore `.utoc`/`.ucas`, Unity bundles (`.assets`, `.unity3d`, `.bundle`) + stream files, nested zip / 7z / gzip / zstd / lz4 / lzma.
+- **Archives**: Unreal `.pak`, IoStore `.utoc`/`.ucas`, Unity bundles (`.assets`, `.unity3d`, `.bundle`) + stream files, Bethesda BSA/BA2, nested zip / 7z / gzip / zstd / lz4 / lzma.
 - **Compression**: zlib, gzip, bz2, lzma, LZ4, LZ4HC, Zstandard, Brotli, snappy, Oodle (Kraken/Mermaid/Leviathan), 7z.
 - **Textures**: PNG, JPG, BMP, WebP, TGA, DDS, KTX — via Pillow + pure-Python block decoders.
+- **Cubemaps**: 6-face PNG/JPG/TGA/DDS/KTX per-face export.
+- **Videos**: `VideoClip` / `MovieTexture` → original container (MP4/MOV/WebM/AVI) or raw.
 - **Audio**: WAV, OGG, FLAC, raw — plus vgmstream for `.wem`, `.fsb`, etc.
-- **Meshes**: OBJ, glTF (skinned + skeleton), USD — with 3D viewport.
+- **Meshes**: OBJ, glTF (skinned + skeleton), **FBX (skinned + morph targets)**, USD/USDA.
+- **Animations**: FBX (default), glTF, JSON keyframe dump.
+- **Asset metadata**: `AnimatorController`, `Avatar`, `LightmapData` → JSON summaries; `SpriteAtlas` → one image per packed sprite.
 - **Text**: JSON, XML, plain text, MonoBehaviour type-tree inspector.
 
 Full details: [`docs/COMPRESSION.md`](docs/COMPRESSION.md) · [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) · [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
@@ -227,5 +245,7 @@ DualForge is free. If it saved you time (or an entire weekend), a coffee is appr
 
 ## Legal
 
-DualForge is **proprietary software**. See [`docs/LICENSES.md`](docs/LICENSES.md) for the full third-party license ledger.
+DualForge is released under the **MIT License** (see [`LICENSE`](LICENSE)). Third-party
+libraries remain under their own licenses — see [`docs/LICENSES.md`](docs/LICENSES.md)
+for the full license ledger.
 You are responsible for the files you decrypt/extract and for obtaining the rights to them.

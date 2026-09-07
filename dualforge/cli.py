@@ -364,7 +364,6 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 
 
 def _cmd_world(args: argparse.Namespace) -> int:
-    from pathlib import Path
 
     from dualforge.export.usd import write_usd_world
     from dualforge.unity import UnityArchive
@@ -408,7 +407,7 @@ def _cmd_il2cpp_inspect(args: argparse.Namespace) -> int:
     except (OSError, MetadataError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"magic        : ok")
+    print("magic        : ok")
     print(f"version      : {info.version}")
     print(f"string literal : {info.string_literal_count}")
     print(f"strings (bytes): {info.string_count}")
@@ -657,7 +656,6 @@ def _cmd_usmap_dump(args: argparse.Namespace) -> int:
 
 
 def _cmd_drivers_list(args: argparse.Namespace) -> int:
-    from dualforge.encryption.presets import PRESETS
 
     from dualforge.drivers import registry
 
@@ -772,7 +770,6 @@ def _cmd_drivers_create(args: argparse.Namespace) -> int:
     if not Path(args.archive).is_file():
         print(f"archive not found: {args.archive}", file=sys.stderr)
         return 1
-    from dualforge.drivers.driver import GameDriver
 
     if args.name and registry.get(args.name) is not None:
         print(
@@ -926,7 +923,6 @@ def _cmd_locres_dump(args: argparse.Namespace) -> int:
 
 
 def _cmd_locres_edit(args: argparse.Namespace) -> int:
-    from pathlib import Path
 
     from dualforge.unreal.locres import apply_replacements, parse_locres_file, save_locres
 
@@ -971,7 +967,6 @@ def _find_unity_asset(archive: str, asset_path: str):
 
 
 def _cmd_repack_texture(args: argparse.Namespace) -> int:
-    from pathlib import Path
 
     from dualforge.unity.repack import replace_texture, save_archive
 

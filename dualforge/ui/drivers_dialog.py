@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -194,7 +193,6 @@ class DriversDialog(QDialog):
         if not chosen:
             return
         from dualforge.drivers import build_driver_from_archive
-        from dualforge.drivers.driver import DRIVER_FILE_SUFFIX
 
         try:
             driver = build_driver_from_archive(chosen)

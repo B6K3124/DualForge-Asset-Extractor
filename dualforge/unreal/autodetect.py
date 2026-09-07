@@ -15,8 +15,6 @@ Search order:
 
 from __future__ import annotations
 
-import fnmatch
-import os
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -109,7 +107,6 @@ def _score_exe(exe: Path, root: Path) -> float:
     name_low = name.lower()
     folded = _fold(name)
     rel = exe.relative_to(root).as_posix().lower()
-    parent = exe.parent.name.lower()
 
     score = 0.0
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1216,7 +1215,6 @@ class MainWindow(QMainWindow):
         )
         if not out_dir:
             return
-        default_dir = str(Path(out_dir).resolve())
         self._last_out_dir = out_dir
         self.log.clear()
         self._progress_bar = QProgressBar()

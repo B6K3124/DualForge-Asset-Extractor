@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 DRIVER_VERSION = "1.0"
 DRIVER_FILE_SUFFIX = ".dualforge-driver.json"

@@ -146,19 +146,36 @@ Audio previews that fail to decode fall back gracefully with an error page.
 ## 4.1 Exporting, replacing & repacking
 
 **Export formats** are set in *File ▸ Settings* (or per-type via the `extract --format`
-CLI flag). The status bar shows the active `Texture2D:png Mesh:obj …` chips.
+CLI flag). The status bar shows the active `Texture2D:png AudioClip:wav Mesh:fbx
+AnimationClip:fbx …` chips.
 
 | Asset type | Export formats |
 |---|---|
 | Texture2D / Sprite | PNG, JPG, BMP, WebP, TGA, DDS, KTX |
+| Cubemap | PNG, JPG, BMP, WebP, TGA, DDS, KTX — one file per face (default PNG) |
 | AudioClip | WAV, OGG, FLAC, raw |
-| Mesh | OBJ, glTF, USD |
-| AnimationClip | glTF, JSON |
+| Mesh | OBJ, glTF, **FBX**, USD, USDA |
+| AnimationClip | glTF, **FBX**, JSON |
+| VideoClip / MovieTexture | source (original container), MP4, MOV, WebM, AVI, raw, JSON |
+| SpriteAtlas | texture formats — one image per packed sprite |
+| AnimatorController | JSON |
+| Avatar | JSON |
+| LightmapData | JSON |
 | Font | TTF, OTF, raw |
 
-**Skeleton & animation.** A skinned Mesh exports as glTF with its skeleton,
-inverse-bind matrices and morph targets; `AnimationClip` assets export their
-position/rotation/scale tracks as glTF animation data.
+**Skeleton & animation.** A skinned Mesh exports with its skeleton, inverse-bind
+matrices and morph targets (BlendShapes) as **FBX 7.4 binary** by default (ASCII can be
+forced with `DUALFORGE_FBX_ASCII=1`), or as skinned glTF. `AnimationClip` assets export
+their position/rotation/scale tracks as an FBX animation (default) or a glTF animation —
+both import cleanly into Blender/Unreal/Unity/Maya (FBX verified against Blender 5.2).
+
+**Cubemaps, videos, atlases & metadata.** Selecting "Cubemap" writes each face as a
+separate image (`<name>_face0.png … _face5.png`). `VideoClip`/`MovieTexture` assets
+re-assemble the streamed file and keep its original container (the extension is picked
+up from the clip; `source` is the auto-detected default). `SpriteAtlas` exports every
+packed sprite as its own image. `AnimatorController`, `Avatar` and `LightmapData` export
+readable JSON (referenced clips, bone tree, parameters/states for controllers; human
+bones + skeleton for avatars; referenced light/dir/shadow-mask textures for lightmaps).
 
 **USD world export.** `Mesh` → USD produces an ASCII `.usda`/`.usd` layer (no
 external USD library needed). The `world` CLI command aggregates every readable
@@ -379,7 +396,7 @@ taken from — re-dump after a game update.
 | Key file (FModel) | Import `Global.AESKeys.json` |
 | Sync endpoints | Comma-separated community key URLs |
 | Donation URL | What the toolbar Donate button opens |
-| Texture / Sprite / Audio / Mesh format | Export format per asset type (PNG/JPG/BMP/WebP/TGA/DDS/KTX, WAV/OGG/FLAC, OBJ/glTF/USD…) |
+| Export formats per asset type | Texture, Sprite, Audio, Mesh (OBJ/glTF/**FBX**/USD), Animation (glTF/**FBX**/JSON), Cubemap, Video, Sprite atlas, Animator, Avatar, Lightmap (JSON) |
 
 ### External tools at a glance
 
@@ -454,6 +471,9 @@ prints the exact file to run. Oodle DLLs and CLI helpers are never bundled — d
 python main.py detect "game\Content\Paks\pakchunk0-Windows.pak"   # identify a file
 python main.py extract "game_Data\sharedassets0.assets" -o out     # extract everything
 python main.py extract "game_Data\sharedassets0.assets" -o out --format jpg
+python main.py extract "game_Data\sharedassets0.assets" -o out --types Mesh AnimationClip --format fbx
+python main.py extract "game_Data\sharedassets0.assets" -o out --types Cubemap VideoClip SpriteAtlas
+python main.py extract "game_Data\sharedassets0.assets" -o out --types AnimatorController Avatar LightmapData
 python main.py extract "game\Content\Paks\pakchunk0-Windows.utoc" -o out --usmap "C:\mappings\game.usmap"
 python main.py keys add "My Game" 0123...64hex...abc
 python main.py keys add "My Game" 0x... --scheme delta-force --guid abc --param xor_key=1122334455667788

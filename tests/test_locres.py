@@ -140,7 +140,6 @@ def test_encode_roundtrip_utf16_content():
 
 
 def test_encode_rejects_unsupported_versions():
-    from dualforge.unreal.locres import MAGIC as fmt_magic
 
     with pytest.raises(ValueError):
         encode_locres([], version=1)

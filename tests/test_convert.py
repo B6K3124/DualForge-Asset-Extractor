@@ -35,10 +35,15 @@ def test_format_choices():
 def test_default_formats():
     assert DEFAULT_FORMATS["Texture2D"] == "png"
     assert DEFAULT_FORMATS["AudioClip"] == "wav"
-    assert DEFAULT_FORMATS["Mesh"] == "obj"
+    assert DEFAULT_FORMATS["Mesh"] == "fbx"
+    assert DEFAULT_FORMATS["AnimationClip"] == "fbx"
     assert DEFAULT_FORMATS["MonoBehaviour"] == "json"
     assert DEFAULT_FORMATS["Shader"] == "shader"
     assert DEFAULT_FORMATS["Font"] == "ttf"
+    assert DEFAULT_FORMATS["Cubemap"] == "png"
+    assert DEFAULT_FORMATS["VideoClip"] == "source"
+    assert DEFAULT_FORMATS["AnimatorController"] == "json"
+    assert DEFAULT_FORMATS["Avatar"] == "json"
 
 
 def test_save_texture_png_jpg(tmp_path: Path):

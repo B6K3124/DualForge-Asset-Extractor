@@ -508,8 +508,6 @@ def decode_ktx(data: bytes):
     internal = _u32(data, 28, endian)
     width = _u32(data, 36, endian)
     height = _u32(data, 40, endian)
-    depth = _u32(data, 44, endian)
-    faces = _u32(data, 52, endian)
     mips = _u32(data, 56, endian)
     kv_size = _u32(data, 60, endian)
     if not _valid_dimensions(width, height):
@@ -552,7 +550,6 @@ def decode_ktx2(data: bytes):
     vk_format = _u32(data, 12)
     width = _u32(data, 20)
     height = _u32(data, 24)
-    level_count = max(_u32(data, 40), 1)
     supercomp = _u32(data, 44)
     if supercomp != 0:
         raise TextureDecodeError("KTX2 supercompression is not supported (zstd/zlc)")

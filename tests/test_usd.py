@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from tempfile import mkdtemp
 
 import pytest
 from PIL import Image

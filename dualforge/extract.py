@@ -106,7 +106,6 @@ def _apply_driver(options: ExtractOptions, driver) -> None:
         options.scheme_params = dict(driver.encryption_params)
     # usmap hint
     if driver.usmap_required and not options.usmap:
-        from pathlib import Path
 
         options.usmap = _find_usmap_hint(options.out_dir)
 

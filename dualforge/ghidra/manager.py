@@ -12,7 +12,6 @@ Nothing here imports Ghidra itself - it only manages the files on disk.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -20,7 +19,7 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 # Version we prefer to download when the user does not supply one.
 DEFAULT_GHIDRA_RELEASE = "Ghidra_11.3.2_build"
@@ -55,7 +54,6 @@ def find_analyze_headless() -> Optional[Path]:
     Mirrors (and extends) ``scripts/ghidra/ghidra_key_finder.find_analyze_headless``
     so the hunt works from library code too.
     """
-    candidates: List[Path] = []
     home = os.environ.get("GHIDRA_HOME")
     if home:
         root = Path(home)

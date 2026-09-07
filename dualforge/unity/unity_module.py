@@ -158,7 +158,6 @@ class UnityArchive:
 
     def world_textures(self) -> Iterator[Dict[str, object]]:
         """Yield PNG payloads for every readable Texture2D in the archive."""
-        from PIL import Image
         import io
 
         for asset in self.assets():
@@ -243,6 +242,18 @@ class UnityArchive:
             written.append(_export_mesh(obj, out_dir, asset.path, chosen, scope=self.env, mesh_reader=asset._reader))
         elif type_name == "AnimationClip":
             written.append(_export_animation(obj, out_dir, asset.path, chosen))
+        elif type_name == "Cubemap":
+            written.extend(_export_cubemap(obj, out_dir, asset.path, chosen))
+        elif type_name in {"VideoClip", "MovieTexture"}:
+            written.append(_export_video(obj, out_dir, asset.path, chosen, archive_path=self.path))
+        elif type_name == "SpriteAtlas":
+            written.extend(_export_sprite_atlas(obj, out_dir, asset.path, chosen, assets_file=_assets_file(asset._reader)))
+        elif type_name == "AnimatorController":
+            written.append(_export_object_summary(obj, out_dir, asset.path, kind="animator", assets_file=_assets_file(asset._reader)))
+        elif type_name == "Avatar":
+            written.append(_export_object_summary(obj, out_dir, asset.path, kind="avatar", assets_file=_assets_file(asset._reader)))
+        elif type_name == "LightmapData":
+            written.append(_export_object_summary(obj, out_dir, asset.path, kind="lightmap", assets_file=_assets_file(asset._reader)))
         elif type_name == "TextAsset":
             data = obj.m_Script
             if isinstance(data, str):
@@ -301,7 +312,19 @@ def _export_mesh(obj, out_dir: str, asset_path: str, fmt: str, scope=None, mesh_
         raise UnityError(f"mesh has no decodable geometry: {asset_path}")
     uvs = handler.m_UV0 or []
     stem = _output_stem(out_dir, asset_path)
-    if str(fmt).lower().lstrip(".") == "gltf":
+    fmt = str(fmt).lower().lstrip(".")
+    if fmt == "fbx":
+        return _export_skinned_fbx(
+            obj,
+            stem,
+            name,
+            verts,
+            tris,
+            uvs,
+            scope=scope,
+            reader=mesh_reader,
+        )
+    if fmt == "gltf":
         try:
             return _export_skinned_gltf(
                 obj,
@@ -313,7 +336,7 @@ def _export_mesh(obj, out_dir: str, asset_path: str, fmt: str, scope=None, mesh_
                 scope=scope,
                 reader=mesh_reader,
             )
-        except Exception as exc:
+        except Exception:
             # skinning is optional; degrade to a plain glTF on any problem
             data = _mesh_to_obj(name, verts, tris, uvs)
             return save_mesh(name or "mesh", data, stem, "gltf")
@@ -394,6 +417,176 @@ def _export_skinned_gltf(obj, stem, name, verts, tris, uvs, scope=None, reader=N
     return str(target)
 
 
+def _export_skinned_fbx(obj, stem, name, verts, tris, uvs, scope=None, reader=None) -> str:
+    """Export a mesh (skinned + morph targets) to FBX when possible."""
+    from dualforge.export.fbx import write_fbx_mesh
+    from dualforge.export.unity_skin import (
+        bind_poses,
+        blend_shapes,
+        bone_hierarchy,
+        find_skinned_mesh_renderer,
+        skin_data,
+    )
+
+    triangles = [tuple(t) for submesh in tris for t in submesh]
+    normals = getattr(obj, "m_Normals", None) or getattr(obj, "m_Normals4", None)
+
+    skin = skin_data(obj)
+    binds = bind_poses(obj)
+    if skin is None or binds is None:
+        return _export_plain_fbx(stem, name, verts, triangles, normals, uvs)
+
+    joints, weights = skin
+    if len(joints) != len(verts):
+        return _export_plain_fbx(stem, name, verts, triangles, normals, uvs)
+
+    bone_names: list = []
+    bone_parents: list = []
+    assets_file = None
+    if reader is not None:
+        try:
+            assets_file = reader.assets_file
+        except Exception:
+            assets_file = None
+    if assets_file is not None and scope is not None:
+        try:
+            smr = find_skinned_mesh_renderer(_iter_objects(scope), reader)
+            if smr is not None:
+                bone_names, bone_parents = bone_hierarchy(smr, assets_file)
+        except UnityError:
+            raise
+        except Exception:
+            bone_names, bone_parents = [], []
+    if not bone_names:
+        bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
+        bone_parents = [-1] * len(binds)
+
+    blendshapes = blend_shapes(obj, len(verts))
+
+    target = stem.with_suffix(".fbx")
+    write_fbx_mesh(
+        str(target),
+        name or "mesh",
+        [tuple(v) for v in verts],
+        triangles,
+        normals=[tuple(float(x) for x in n) for n in normals] if normals else None,
+        uvs=[tuple(float(u) for u in uv) for uv in uvs] if uvs else None,
+        bone_names=bone_names,
+        bone_parents=bone_parents,
+        bind_matrices=binds,
+        joints=joints,
+        weights=weights,
+        blendshapes=blendshapes or None,
+    )
+    return str(target)
+
+
+def _export_plain_fbx(stem, name, verts, triangles, normals, uvs) -> str:
+    from dualforge.export.fbx import write_fbx_mesh
+
+    target = stem.with_suffix(".fbx")
+    write_fbx_mesh(
+        str(target),
+        name or "mesh",
+        [tuple(v) for v in verts],
+        triangles,
+        normals=[tuple(float(x) for x in n) for n in normals] if normals else None,
+        uvs=[tuple(float(u) for u in uv) for uv in uvs] if uvs else None,
+    )
+    return str(target)
+
+
+def _assets_file(reader) -> object:
+    try:
+        return reader.assets_file
+    except Exception:
+        return None
+
+
+def _export_cubemap(obj, out_dir: str, asset_path: str, fmt: str) -> List[str]:
+    from dualforge.export.convert import save_texture
+    from dualforge.export.unity_extra import cubemap_faces
+
+    stem = _output_stem(out_dir, asset_path)
+    faces = cubemap_faces(obj)
+    if not faces:
+        raise UnityError(f"cubemap has no decodable faces: {asset_path}")
+    written: List[str] = []
+    if len(faces) == 1:
+        written.append(save_texture(faces[0], stem, fmt))
+        return written
+    for index, face in enumerate(faces):
+        face_stem = stem.with_name(f"{stem.name}_face{index}")
+        written.append(save_texture(face, face_stem, "png"))
+    return written
+
+
+def _export_video(obj, out_dir: str, asset_path: str, fmt: str, archive_path: str) -> str:
+    from dualforge.export.convert import save_json
+    from dualforge.export.unity_extra import video_clip_data
+
+    stem = _output_stem(out_dir, asset_path)
+    fmt = str(fmt).lower().lstrip(".")
+    if fmt in ("json", "txt"):
+        metadata = {
+            "name": str(getattr(obj, "m_Name", "") or asset_path),
+            "width": getattr(obj, "Width", 0),
+            "height": getattr(obj, "Height", 0),
+            "frame_rate": getattr(obj, "m_FrameRate", 0.0),
+            "frame_count": getattr(obj, "m_FrameCount", 0),
+            "format": getattr(obj, "m_Format", 0),
+            "original_path": str(getattr(obj, "m_OriginalPath", "") or ""),
+        }
+        return save_json(metadata, stem, "json")
+    try:
+        data, suffix = video_clip_data(obj, archive_path, None)
+    except ValueError:
+        data, suffix = b"", Path(getattr(obj, "m_OriginalPath", "") or "").suffix or ".mp4"
+    if not data:
+        raise UnityError(
+            "video export failed: no streamed resource resolved "
+            f"({getattr(getattr(obj, 'm_ExternalResources', None), 'm_Path', 'unknown')})"
+        )
+    if fmt not in ("source", "raw", "bin"):
+        suffix = f".{fmt}"
+    return _write_bytes(stem.with_suffix(suffix), data)
+
+
+def _export_sprite_atlas(obj, out_dir: str, asset_path: str, fmt: str, assets_file) -> List[str]:
+    from dualforge.export.convert import save_texture
+    from dualforge.export.unity_extra import sprite_atlas_entries
+
+    entries = sprite_atlas_entries(obj, assets_file) if assets_file is not None else []
+    if not entries:
+        raise UnityError(f"sprite atlas has no resolvable sprites: {asset_path}")
+    written: List[str] = []
+    for name, image in entries:
+        entry_stem = _output_stem(out_dir, asset_path, name=name)
+        written.append(save_texture(image, entry_stem, fmt))
+    return written
+
+
+def _export_object_summary(obj, out_dir: str, asset_path: str, kind: str, assets_file) -> str:
+    from dualforge.export.convert import save_json
+    from dualforge.export.unity_extra import (
+        animator_summary,
+        avatar_summary,
+        lightmap_summary,
+    )
+
+    stem = _output_stem(out_dir, asset_path)
+    if kind == "animator":
+        summary = animator_summary(obj, assets_file)
+    elif kind == "avatar":
+        summary = avatar_summary(obj)
+    elif kind == "lightmap":
+        summary = lightmap_summary(obj, assets_file)
+    else:
+        summary = {"name": str(getattr(obj, "m_Name", "") or asset_path)}
+    summary.setdefault("type", kind)
+    return save_json(summary, stem, "json")
+
+
 def _iter_objects(scope):
     try:
         yield from scope.get_objects()
@@ -410,8 +603,9 @@ def _export_animation(obj, out_dir: str, asset_path: str, fmt: str) -> str:
 
     stem = _output_stem(out_dir, asset_path)
     fmt = str(fmt).lower().lstrip(".")
+    name = str(getattr(obj, "m_Name", "") or Path(asset_path).name) or "clip"
     if fmt == "json":
-        summary: Dict[str, object] = {"name": getattr(obj, "m_Name", "") or asset_path}
+        summary: Dict[str, object] = {"name": name}
         tracks = animation_tracks(obj)
         summary["tracks"] = {
             node: {
@@ -423,9 +617,19 @@ def _export_animation(obj, out_dir: str, asset_path: str, fmt: str) -> str:
         summary["sample_rate"] = getattr(obj, "m_SampleRate", 0) or 60
         return save_json(summary, stem, "json")
 
+    if fmt == "fbx":
+        from dualforge.export.fbx import write_fbx_animation
+
+        target = stem.with_suffix(".fbx")
+        write_fbx_animation(
+            str(target),
+            name=name,
+            tracks=animation_tracks(obj),
+        )
+        return str(target)
+
     from dualforge.export.gltf import write_gltf_animation
 
-    name = str(getattr(obj, "m_Name", "") or Path(asset_path).name) or "clip"
     target = stem.with_suffix(".gltf")
     write_gltf_animation(
         str(target),

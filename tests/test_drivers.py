@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 from dualforge.drivers import GameDriver, registry
 from dualforge.drivers.defaults import BUILTIN_DRIVERS
-from dualforge.drivers.driver import DRIVER_FILE_SUFFIX, DRIVER_MAGIC, DRIVER_VERSION
+from dualforge.drivers.driver import DRIVER_MAGIC, DRIVER_VERSION
 
 
 # ── GameDriver serialization ─────────────────────────────────────────

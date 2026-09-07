@@ -28,8 +28,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 from dualforge.compression import CompressionError, decompress
 
@@ -149,14 +148,12 @@ class BethesdaArchive:
 
         if version == 0x67:
             # v103: 32-byte header, no file_flags / padding.
-            header_size = 32
             self.version = 103
             file_flags = 0
         else:
             if len(data) < 36:
                 raise BethesdaError("BSA header truncated")
             file_flags, = struct.unpack_from("<H", data, 32)
-            header_size = 36
             self.version = VERSION_BY_INT.get(version)
             if self.version is None:
                 raise BethesdaError(f"unsupported BSA version 0x{version:x}")
@@ -308,7 +305,6 @@ class BethesdaArchive:
         entry_base = 28
         if len(data) < entry_base:
             raise BethesdaError("BA2 header truncated")
-        header_size = struct.unpack_from("<I", data, 24)[0]
         entry_size = 36
         entry_end = entry_base + file_count * entry_size
         if entry_end > len(data):
@@ -342,7 +338,6 @@ class BethesdaArchive:
         entry_base = 24
         if len(data) < entry_base:
             raise BethesdaError("BA2 header truncated")
-        header_size = 0
         names = self._names_at(data, name_off, file_count, 2)
         entries: List[_BA2Texture] = []
         pos = entry_base
@@ -520,10 +515,6 @@ def build_dds(
     DDSD_PIXELFORMAT = 0x1000
     DDSD_MIPMAPCOUNT = 0x20000
     DDSD_LINEARSIZE = 0x80000
-
-    DDPF_ALPHAPIXELS = 0x1
-    DDPF_FOURCC = 0x4
-    DDPF_RGB = 0x40
 
     DDSCAPS_COMPLEX = 0x8
     DDSCAPS_TEXTURE = 0x1000

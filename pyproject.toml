@@ -8,10 +8,11 @@ version = "0.3.0"
 description = "Universal Unity + Unreal game asset extraction toolkit (PySide6)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 authors = [{ name = "DualForge" }]
 keywords = ["unreal", "unity", "pak", "utoc", "ucas", "asset", "extractor", "oodle", "zstd"]
 classifiers = [
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]

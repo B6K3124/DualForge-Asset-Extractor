@@ -8,25 +8,35 @@ from dualforge.export.gltf import write_gltf
 
 TEXTURE_FORMATS = ("png", "jpg", "bmp", "webp", "tga", "dds", "ktx")
 AUDIO_FORMATS = ("wav", "ogg", "flac", "raw")
-MESH_FORMATS = ("obj", "gltf", "usd", "usda")
+MESH_FORMATS = ("obj", "gltf", "fbx", "usd", "usda")
 TEXT_FORMATS = ("txt",)
 RAW_FORMATS = ("bin",)
 OBJECT_FORMATS = ("json",)
 SHADER_FORMATS = ("shader", "txt")
 FONT_FORMATS = ("ttf", "otf", "bin")
-ANIMATION_FORMATS = ("gltf", "json")
+CUBEMAP_FORMATS = ("png", "jpg", "bmp", "webp", "tga", "dds", "ktx")
+VIDEO_FORMATS = ("source", "mp4", "mov", "webm", "avi", "bin", "json")
+
+ANIMATION_FORMATS = ("gltf", "fbx", "json")
 
 DEFAULT_FORMATS = {
     "Texture2D": "png",
     "Sprite": "png",
     "AudioClip": "wav",
-    "Mesh": "obj",
+    "Mesh": "fbx",
     "TextAsset": "txt",
     "MonoBehaviour": "json",
     "Material": "json",
     "Shader": "shader",
     "Font": "ttf",
-    "AnimationClip": "gltf",
+    "AnimationClip": "fbx",
+    "Cubemap": "png",
+    "VideoClip": "source",
+    "MovieTexture": "source",
+    "SpriteAtlas": "png",
+    "AnimatorController": "json",
+    "Avatar": "json",
+    "LightmapData": "json",
 }
 
 
@@ -51,6 +61,14 @@ def format_choices(type_name: str) -> Tuple[str, ...]:
         return FONT_FORMATS
     if type_name == "AnimationClip":
         return ANIMATION_FORMATS
+    if type_name == "Cubemap":
+        return CUBEMAP_FORMATS
+    if type_name in {"VideoClip", "MovieTexture"}:
+        return VIDEO_FORMATS
+    if type_name == "SpriteAtlas":
+        return TEXTURE_FORMATS
+    if type_name in {"AnimatorController", "Avatar", "LightmapData"}:
+        return OBJECT_FORMATS
     return RAW_FORMATS
 
 
@@ -201,6 +219,7 @@ def _parse_obj_with_uv(data: bytes):
 __all__ = [
     "AUDIO_FORMATS",
     "ANIMATION_FORMATS",
+    "CUBEMAP_FORMATS",
     "DEFAULT_FORMATS",
     "FONT_FORMATS",
     "MESH_FORMATS",
@@ -209,6 +228,7 @@ __all__ = [
     "SHADER_FORMATS",
     "TEXT_FORMATS",
     "TEXTURE_FORMATS",
+    "VIDEO_FORMATS",
     "format_choices",
     "normalize_format",
     "save_font",
