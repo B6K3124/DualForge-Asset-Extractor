@@ -65,6 +65,34 @@ class UnrealBridge:
         result = self._run(args)
         return _parse_extract_output(result)
 
+    def preview_mesh(
+        self,
+        pak: str,
+        vpath: str,
+        aes_key: Optional[str] = None,
+        usmap: Optional[str] = None,
+        dynamic_keys: Optional[Dict[str, str]] = None,
+        scheme: Optional[str] = None,
+    ):
+        """Preview one Unreal package as a mesh, returning ``(glb_bytes, kind)``
+        or ``None`` when the package holds no readable mesh.
+
+        Requires the ``uex`` CLI with a ``preview-mesh`` command; other
+        CUE4Parse CLIs cannot produce mesh geometry.
+        """
+        self._require()
+        uex = self._uex_adapter()
+        if uex is None:
+            raise UnrealError(
+                "Unreal mesh preview requires the 'uex' CLI with a 'preview-mesh' "
+                "command (https://github.com/arkive-games/uex). Point DUALFORGE_CUE4PARSE "
+                "at that build to preview Unreal meshes."
+            )
+        return uex.preview_mesh(
+            pak, vpath, aes_key, usmap,
+            dynamic_keys=dynamic_keys, scheme=scheme,
+        )
+
     def _require(self) -> None:
         if not self.available():
             raise UnrealError(

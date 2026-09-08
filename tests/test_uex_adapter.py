@@ -8,6 +8,7 @@ from dualforge.unreal.uex_adapter import (
     find_usmap,
     normalize_aes_key,
     parse_export_summary,
+    parse_mesh_summary,
     parse_search_output,
 )
 
@@ -206,3 +207,67 @@ def test_list_files_truncation_raises(tmp_path: Path):
     adapter = _adapter(plan)
     with pytest.raises(UnrealError, match="cap"):
         adapter.list_files(str(pak))
+
+
+def test_parse_mesh_summary():
+    assert parse_mesh_summary("meshexport: staticmesh -> C:/out.glb\n") == "staticmesh"
+    assert parse_mesh_summary("meshexport: SkeletalMesh -> C:/out.glb") == "skeletalmesh"
+    assert parse_mesh_summary("meshexport: none") is None
+    assert parse_mesh_summary("exported: 0 packages") is None
+
+
+def test_preview_mesh_returns_glb_and_kind(tmp_path: Path):
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+    glb = b"glTF" + b"x" * 12
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        out_flag = args[args.index("--out") + 1]
+        Path(out_flag).write_bytes(glb)
+        return f"meshexport: staticmesh -> {out_flag}\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    result = adapter.preview_mesh(str(pak), "Game/a.uasset", aes_key="0123")
+    assert result is not None and result[0] == glb and result[1] == "staticmesh"
+
+
+def test_preview_mesh_none_when_no_mesh(tmp_path: Path):
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        return "meshexport: none\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    assert adapter.preview_mesh(str(pak), "Game/no-mesh.uasset") is None
+
+
+def test_preview_mesh_raises_on_exit_code(tmp_path: Path):
+    import pytest
+
+    from dualforge.unreal.bridge import UnrealError
+
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        return "", "boom", 1
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    with pytest.raises(UnrealError, match="boom"):
+        adapter.preview_mesh(str(pak), "Game/a.uasset")

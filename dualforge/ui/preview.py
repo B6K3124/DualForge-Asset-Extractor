@@ -357,6 +357,10 @@ class PreviewWorker(QThread):
                         raise ValueError("no file was extracted for preview")
                     cached = candidate.read_bytes()
                     helpers.write_cached(self.cache_dir, key, filename, cached)
+        mesh_result = self._try_unreal_mesh()
+        if mesh_result is not None:
+            payload["mesh"] = mesh_result
+            return payload
         payload["raw"] = cached
         locres_result = _try_locres(filename, cached)
         if locres_result is not None:
@@ -395,6 +399,43 @@ class PreviewWorker(QThread):
         else:
             payload["meta"]["Decoded"] = "no"
         return payload
+
+    def _try_unreal_mesh(self):
+        """Best-effort mesh preview for an Unreal package via the uex CLI.
+
+        Returns the ``(verts, normals, tris, edges)`` tuple when the package
+        holds an exportable mesh, or ``None`` when no CLI/geometry is available
+        (callers fall back to generic sniffing).
+        """
+        from dualforge.unreal import UnrealBridge
+
+        if not self.item.archive_path or not self.item.entry:
+            return None
+        try:
+            bridge = UnrealBridge()
+            if not bridge.available():
+                return None
+        except Exception:
+            return None
+        try:
+            result = bridge.preview_mesh(
+                self.item.archive_path,
+                self.item.entry,
+                aes_key=self.item.aes_key,
+            )
+        except Exception:
+            return None
+        if not result:
+            return None
+        glb_bytes, _kind = result
+        if not glb_bytes:
+            return None
+        try:
+            from dualforge.export.gltf_reader import parse_glb
+
+            return parse_glb(glb_bytes)
+        except Exception:
+            return None
 
     def _preview_cdpr(self) -> dict:
         payload = self._base_payload()

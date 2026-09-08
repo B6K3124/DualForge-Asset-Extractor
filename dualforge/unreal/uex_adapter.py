@@ -124,6 +124,22 @@ def parse_export_summary(output: str) -> int:
     return sum(int(group) for group in match.groups())
 
 
+_MESH_RE = re.compile(r"meshexport:\s*([a-z0-9_]+)(?:\s*->.*)?", re.IGNORECASE)
+
+
+def parse_mesh_summary(output: str) -> Optional[str]:
+    """Extract the exported mesh kind (``staticmesh``/``skeletalmesh``/...) from
+    uex ``preview-mesh`` output, or ``None`` when the package held no readable
+    mesh (``meshexport: none``) or nothing was mentioned."""
+    match = _MESH_RE.search(output)
+    if not match:
+        return None
+    kind = match.group(1).lower()
+    if kind == "none":
+        return None
+    return kind
+
+
 class UexAdapter:
     """Thin adapter around the 'uex' CUE4Parse CLI (https://github.com/arkive-games/uex).
 
@@ -206,6 +222,58 @@ class UexAdapter:
         if code != 0:
             raise UnrealError(f"uex export failed (exit {code}): {stderr.strip() or output.strip()}")
         return parse_export_summary(output)
+
+    def preview_mesh(
+        self,
+        pak: str,
+        vpath: str,
+        aes_key: Optional[str] = None,
+        usmap: Optional[str] = None,
+        dynamic_keys: Optional[Dict[str, str]] = None,
+        scheme: Optional[str] = None,
+    ) -> Optional[Tuple[bytes, str]]:
+        """Export one package's mesh as GLB via uex ``preview-mesh``.
+
+        Returns ``(glb_bytes, kind)`` where ``kind`` is the exported Unreal
+        type (e.g. ``staticmesh`` / ``skeletalmesh``), or ``None`` when the
+        package holds no readable mesh (uex reports ``meshexport: none``).
+        """
+        paks_dir = str(Path(pak).parent)
+        game = self._game_for(paks_dir, aes_key, usmap, scheme)
+        config = _write_config(
+            paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,
+            dynamic_keys=dynamic_keys,
+        )
+        out_path = Path(tempfile.mkstemp(suffix=".glb", prefix="dualforge_mesh_")[1])
+        try:
+            args = [
+                "preview-mesh",
+                "--profile",
+                "dualforge",
+                "--config",
+                str(config),
+                vpath,
+                "--out",
+                str(out_path),
+            ]
+            output, stderr, code = self._run(args, timeout=EXPORT_TIMEOUT)
+        finally:
+            _remove(config)
+        if code != 0:
+            raise UnrealError(f"uex preview-mesh failed (exit {code}): {stderr.strip() or output.strip()}")
+        combined = f"{output}\n{stderr}"
+        if "meshexport: none" in combined:
+            return None
+        summary = parse_mesh_summary(combined)
+        if not out_path.is_file():
+            raise UnrealError("uex preview-mesh reported success but wrote no GLB")
+        try:
+            glb = out_path.read_bytes()
+        finally:
+            _remove(out_path)
+        if not glb:
+            return None
+        return glb, summary
 
     # -------------------------------------------------------------- internals
 
@@ -340,5 +408,6 @@ __all__ = [
     "find_usmap",
     "normalize_aes_key",
     "parse_export_summary",
+    "parse_mesh_summary",
     "parse_search_output",
 ]
