@@ -13,7 +13,6 @@ encrypted archives, compressed bundles, and a built-in hex inspector for everyth
 
 ![DualForge asset browser](docs/screenshots/hero.png)
 
-*Shoot a fresh hero with any game archive: `python scripts/screenshot.py <archive>` (renders offscreen, no window needed).*
 
 ---
 
