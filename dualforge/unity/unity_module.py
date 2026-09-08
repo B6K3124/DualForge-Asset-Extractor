@@ -87,6 +87,10 @@ class UnityArchive:
 
     def engine_version(self) -> str:
         """Best-effort engine version from the bundle/serialized header."""
+        for file in self._serialized_files():
+            value = getattr(file, "unity_version", None)
+            if value:
+                return str(value).strip()
         for file in self.env.files.values():
             value = getattr(file, "unity_version", None) or getattr(file, "version", None)
             if value:
@@ -95,6 +99,12 @@ class UnityArchive:
 
     def serialized_version(self) -> int:
         """Best-effort serialized format version (bundle header or -1)."""
+        for file in self._serialized_files():
+            header = getattr(file, "header", None)
+            if header is not None:
+                value = getattr(header, "version", None)
+                if isinstance(value, int):
+                    return value
         for file in self.env.files.values():
             header = getattr(file, "header", None)
             if header is not None:
@@ -102,6 +112,17 @@ class UnityArchive:
                 if isinstance(value, int):
                     return value
         return -1
+
+    def _serialized_files(self) -> list:
+        """Iterate SerializedFile instances, unwrapping bundle containers."""
+        result: list = []
+        for file in self.env.files.values():
+            children = getattr(file, "files", None)
+            if isinstance(children, dict):
+                result.extend(v for v in children.values() if type(v).__name__ == "SerializedFile")
+            elif type(file).__name__ == "SerializedFile":
+                result.append(file)
+        return result
 
     def set_decrypt_key(self, key: str, scheme: str = "aes-256") -> None:
         """Set the Unity bundle decryption key via UnityPy.
@@ -189,7 +210,8 @@ class UnityArchive:
         except Exception:
             first = None
         if first is not None:
-            for path, reader in chain((first,), container):
+            for path, value in chain((first,), container):
+                reader = value.deref() if hasattr(value, "deref") else value
                 yield UnityAsset(
                     path=path,
                     type_name=reader.type.name,

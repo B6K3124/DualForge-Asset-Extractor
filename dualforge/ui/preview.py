@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from dualforge.ui import preview_helpers as helpers
-from dualforge.ui.widgets import HexView, ImageView, LoadingOverlay, MeshView, WaveformWidget, gl_available
+from dualforge.ui.widgets import HexView, ImageView, LoadingOverlay, MeshView, SoftwareMeshView, WaveformWidget, gl_context_available
 
 IMAGE_TYPES = {"Texture2D", "Sprite"}
 AUDIO_TYPES = {"AudioClip"}
@@ -117,7 +117,11 @@ class PreviewWorker(QThread):
             obj = self._read_typetree_fallback(asset)
             if obj is None:
                 raise ValueError(f"could not decode this Unity {asset.type_name} object: {exc}") from exc
-        type_name = obj.type.name
+        type_name = getattr(obj, "type", None)
+        if type_name is None:
+            reader_type = getattr(asset._reader, "type", None)
+            type_name = reader_type.name if reader_type is not None else asset.type_name
+        type_name = getattr(type_name, "name", type_name)
         payload["kind"] = type_name
         tree = _typetree(payload, asset)
         if type_name in IMAGE_TYPES:
@@ -152,10 +156,11 @@ class PreviewWorker(QThread):
                 }
             )
         elif type_name in MESH_TYPES:
-            from UnityPy.helpers import MeshExporter
+            from UnityPy.export import MeshExporter
 
-            name, obj_data = MeshExporter.export_obj(obj)
-            parsed = helpers.parse_obj(obj_data)
+            obj_data = MeshExporter.export_mesh_obj(obj)
+            name = str(getattr(obj, "m_Name", "") or "").strip()
+            parsed = helpers.parse_obj(obj_data.encode("utf-8"))
             if parsed is None:
                 raise ValueError("mesh has no decodable geometry")
             verts, normals, tris, edges = parsed
@@ -723,12 +728,11 @@ class MeshPage(QWidget):
         toolbar.addWidget(self.stats_label)
         layout.addLayout(toolbar)
 
-        if gl_available():
+        if gl_context_available():
             self.view = MeshView()
-            layout.addWidget(self.view, 1)
         else:
-            self.view = None
-            layout.addWidget(QLabel("OpenGL is not available on this system."), 1)
+            self.view = SoftwareMeshView()
+        layout.addWidget(self.view, 1)
 
     def set_mesh(self, mesh, bones=None) -> None:
         if self.view is None:

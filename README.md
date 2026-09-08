@@ -19,15 +19,7 @@ encrypted archives, compressed bundles, and a built-in hex inspector for everyth
 
 ## Installation
 
-### Download (recommended)
-
-Grab the latest portable build from **[Releases](https://github.com/B6K3124/DualForge-Asset-Extractor/releases)** — no installer needed.
-
-1. Unzip the `dist` folder anywhere (e.g. `C:\Programs\DualForge\`).
-   `DualForge.exe` and the `_internal` folder **must stay together**.
-2. Run `DualForge.exe`. SmartScreen may warn — choose **More info → Run anyway** (the build is unsigned).
-
-Or use the one-command installer (no admin rights needed):
+### From core drivers
 
 ```powershell
 .\scripts\install.ps1                        # installs to %LOCALAPPDATA%\Programs\DualForge
