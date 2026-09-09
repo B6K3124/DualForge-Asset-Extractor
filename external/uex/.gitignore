@@ -1,0 +1,11 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+TestResults/
+publish/
+# real game profiles contain AES keys and machine paths — keep local
+profiles.json
+# native decompression DLLs downloaded at runtime
+.uex-cache/

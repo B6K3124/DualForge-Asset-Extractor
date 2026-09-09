@@ -4,11 +4,29 @@ Goal: let DualForge render Unreal `UStaticMesh` / `USkeletalMesh` assets from `.
 archives inside the existing 3D preview viewport (the same mesh page Unity uses),
 reusing the `MeshView` / `SoftwareMeshView` pipeline.
 
-Status: DualForge-side pieces (GLB reader, uex adapter `preview_mesh`, bridge
-passthrough, `_preview_unreal` wiring) are implemented and tested; the **uex CLI
-`preview-mesh` command is implemented** (`AssetOps.SaveMeshGLB`, Program.cs
-command, serve dispatch, MCP tool, unit tests) but not yet committed/pushed to
-the uex repo, and end-to-end verification against a real game pak is pending.
+Status: implemented and verified end-to-end against **real TEKKEN 8 data**. The
+DualForge-side pieces (GLB reader, uex adapter `preview_mesh`, bridge
+passthrough, `_preview_unreal` wiring) and the uex CLI `preview-mesh` command
+(`AssetOps.SaveMeshGLB`, Program.cs command, serve dispatch, MCP tool, unit
+tests) are complete. Verified live through `bridge.preview_mesh`:
+`SK_CH_bal_dokuro.uasset` -> `skeletalmesh` GLB (4291 verts / 7138 tris) and
+`SM_CraneRig_Arm.uasset` -> `staticmesh` GLB, both parsed back by
+`dualforge.export.gltf_reader.parse_glb` into displayable geometry.
+
+Notes from that verification:
+- uex is vendored at `external/uex` (built from source, published to
+  `~/.dualforge/uex.exe` for CLI auto-discovery).
+- TEKKEN 8 paks are UE 5.5-cooked with **unversioned properties**: serializing
+  any package requires a `.usmap`. DualForge auto-finds one via
+  `UexAdapter.find_usmap` (`DUALFORGE_USMAP` -> `~/.dualforge/*.usmap` -> pak
+  folder -> cwd) and the UI preview path passes it through. A community-hosted
+  TEKKEN 8 usmap (dumped from the game) works; it is NOT generated or shipped
+  by DualForge (usmaps can only be produced by a runtime dumper in the running
+  game).
+- `_game_for` picks `GAME_UE5_2` for TEKKEN 8 via a `"tekken 8"` folder hint
+  (added before the generic `"tekken" -> GAME_TEKKEN7` rule).
+- `UnrealBridge._find_cli` only accepts real executables (`.exe`) when scanning
+  `~/.dualforge`, so published `uex.exe` is picked over `uex.deps.json` etc.
 
 ## Background
 
@@ -33,7 +51,7 @@ the uex repo, and end-to-end verification against a real game pak is pending.
   preview command runs the session into a temp dir and copies the produced
   `.glb` to its `--out` target.
 
-## uex CLI changes (external repo)
+## uex CLI changes (vendored at `external/uex`)
 
 Add a `preview-mesh` command mirroring the existing `preview-texture`:
 

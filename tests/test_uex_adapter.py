@@ -22,9 +22,17 @@ def test_normalize_aes_key():
 
 def test_egame_candidates_footer_13():
     candidates = egame_candidates("E:/Games/Tekken 8", 13)
-    assert candidates[0] == "GAME_TEKKEN7"  # folder hint first
+    assert candidates[0] == "GAME_UE5_2"  # "tekken 8" folder hint first
+    assert "GAME_TEKKEN7" in candidates
+    assert candidates.index("GAME_UE5_2") < candidates.index("GAME_TEKKEN7")
     assert "GAME_UE5_4" in candidates
     assert "GAME_UE5_LATEST" in candidates
+
+
+def test_egame_candidates_tekken7_falls_back_to_tekken7():
+    candidates = egame_candidates("E:/Games/Tekken 7", 13)
+    assert candidates[0] == "GAME_TEKKEN7"  # "tekken 8" should not match
+    assert "GAME_UE5_2" not in candidates
 
 
 def test_egame_candidates_unknown_footer():
@@ -250,6 +258,38 @@ def test_preview_mesh_none_when_no_mesh(tmp_path: Path):
     adapter = UexAdapter("fake-uex")
     adapter._run = run
     assert adapter.preview_mesh(str(pak), "Game/no-mesh.uasset") is None
+
+
+def test_preview_mesh_resolves_usmap_when_missing(tmp_path: Path, monkeypatch):
+    import json
+
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+    usmap_file = tmp_path / "game.usmap"
+    usmap_file.write_bytes(b"M")
+
+    seen = {}
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        cfg = args[args.index("--config") + 1]
+        with open(cfg, encoding="utf-8") as fh:
+            seen["cfg"] = json.load(fh)
+        out_flag = args[args.index("--out") + 1]
+        Path(out_flag).write_bytes(b"glTFx")
+        return f"meshexport: staticmesh -> {out_flag}\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    monkeypatch.setattr(
+        "dualforge.unreal.uex_adapter.find_usmap", lambda p: str(usmap_file)
+    )
+    result = adapter.preview_mesh(str(pak), "Game/a.uasset", aes_key="0123")
+    assert result is not None and result[1] == "staticmesh"
+    assert seen["cfg"]["profiles"]["dualforge"]["usmap"] == str(usmap_file)
 
 
 def test_preview_mesh_raises_on_exit_code(tmp_path: Path):

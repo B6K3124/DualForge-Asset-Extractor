@@ -1,0 +1,28 @@
+{
+  "profiles": {
+    "palworld": {
+      "game": "GAME_Palworld",
+      "paksDir": "E:/SteamLibrary/steamapps/common/Palworld/Pal/Content/Paks",
+      "usmap": "FILL_ME/Palworld.usmap",
+      "aesKey": null,
+      "outputDir": "E:/SteamLibrary/steamapps/common/Palworld/Exports",
+      "exportRoots": ["Pal/Content/Pal", "Pal/Content/L10N", "Pal/Config"]
+    },
+    "aion2": {
+      "game": "GAME_Aion2",
+      "paksDir": "G:/NCSoft/AION2_TW/Aion2/Content/Paks",
+      "usmap": "G:/NCSoft/FModel/AION2-5.3.2.0-1.0.34.0.usmap",
+      "aesKey": "0xFILL_ME",
+      "outputDir": "G:/NCSoft/Export/Exports",
+      "exportRoots": ["AION2/Content/Data", "AION2/Content/UI"]
+    },
+    "gmzz": {
+      "game": "GAME_LordOfMysteries",
+      "paksDir": "D:/GMZZLauncher/Game/C7",
+      "usmap": "FILL_ME/5.7.4- Lord of Mysteries.usmap",
+      "aesKey": "0xFILL_ME",
+      "outputDir": "D:/GMZZLauncher/uex-out/gmzz",
+      "exportRoots": ["C7/Content/ScriptOPCode", "C7/Content/Arts/UI_2/Resource/Item"]
+    }
+  }
+}

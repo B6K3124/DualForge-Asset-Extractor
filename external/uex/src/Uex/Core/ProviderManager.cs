@@ -1,0 +1,111 @@
+using System.Collections.Concurrent;
+using CUE4Parse.Compression;
+using CUE4Parse.Encryption.Aes;
+using CUE4Parse.FileProvider;
+using CUE4Parse.GameTypes.LordOfMysteries.FileProvider;
+using CUE4Parse.MappingsProvider.Usmap;
+using CUE4Parse.UE4.Objects.Core.Misc;
+using CUE4Parse.UE4.Versions;
+using Uex.Config;
+
+namespace Uex.Core;
+
+/// <summary>
+/// Lazily mounts and caches one DefaultFileProvider per profile. This is the heart of
+/// multi-game support: every operation names its profile, first use mounts (several
+/// seconds), later uses hit the cache, and different games coexist in one process.
+/// </summary>
+public sealed class ProviderManager(ProfilesConfig config) : IDisposable
+{
+    private readonly ConcurrentDictionary<string, Lazy<DefaultFileProvider>> _providers =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static bool _nativesReady;
+    private static readonly object _nativesLock = new();
+
+    public DefaultFileProvider Get(string profileName)
+    {
+        var profile = config.GetProfile(profileName); // throws UexException for unknown names
+        var lazy = _providers.GetOrAdd(profileName,
+            _ => new Lazy<DefaultFileProvider>(() => Mount(profileName, profile)));
+        try
+        {
+            return lazy.Value;
+        }
+        catch
+        {
+            // Lazy caches its exception forever — evict so a long-lived serve/MCP
+            // process can retry the mount after the user fixes the profile.
+            _providers.TryRemove(new KeyValuePair<string, Lazy<DefaultFileProvider>>(profileName, lazy));
+            throw;
+        }
+    }
+
+    private static DefaultFileProvider Mount(string name, GameProfile p)
+    {
+        EnsureNatives();
+        if (!Enum.TryParse<EGame>(p.Game, ignoreCase: true, out var game))
+            throw new UexException(
+                $"Profile '{name}': unknown game '{p.Game}'. Use a CUE4Parse EGame name, e.g. GAME_Palworld, GAME_Aion2, GAME_UE5_1.");
+        if (!Directory.Exists(p.PaksDir))
+            throw new UexException($"Profile '{name}': paks directory not found: {p.PaksDir}");
+        if (p.Usmap is not null && !File.Exists(p.Usmap))
+            throw new UexException($"Profile '{name}': usmap file not found: {p.Usmap}");
+
+        var provider = CreateProvider(game, p.PaksDir);
+        if (p.Usmap is not null)
+            provider.MappingsContainer = new FileUsmapTypeMappingsProvider(p.Usmap);
+        provider.Initialize();
+        if (!string.IsNullOrEmpty(p.AesKey))
+            provider.SubmitKey(new FGuid(), new FAesKey(p.AesKey));
+        provider.Mount();     // mounts remaining unencrypted archives; already-mounted are skipped
+        provider.PostMount();
+        if (provider.Files.Count == 0)
+            throw new UexException(
+                $"Profile '{name}': mounted 0 files from {p.PaksDir}. Check the AES key and game version.");
+        return provider;
+    }
+
+    /// <summary>
+    /// The provider for a game. Most use CUE4Parse's generic one, but a game whose
+    /// containers are not plain .pak/.utoc needs its own — and picking the generic one
+    /// there fails <em>silently</em>: the containers it cannot describe are simply not
+    /// mounted, so the profile looks healthy and merely comes up short. Lord of
+    /// Mysteries mounts 148k files on the generic provider and 591k on its own.
+    /// </summary>
+    private static DefaultFileProvider CreateProvider(EGame game, string directory)
+    {
+        var versions = new VersionContainer(game);
+        return game switch
+        {
+            // Reads package.manifest for the container set and Manifest_UFSFiles_Win64.txt
+            // for chunk names, so its directory must be the game root that holds both —
+            // Content/Paks alone is not enough.
+            EGame.GAME_LordOfMysteries => new LoMDefaultFileProvider(
+                directory, SearchOption.AllDirectories, versions, StringComparer.OrdinalIgnoreCase),
+            _ => new DefaultFileProvider(
+                directory, SearchOption.AllDirectories, versions, StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    /// <summary>Oodle/zlib native decompression, required for UE5 paks. DLLs are downloaded once into .uex-cache next to the exe.</summary>
+    private static void EnsureNatives()
+    {
+        lock (_nativesLock)
+        {
+            if (_nativesReady) return;
+            var cache = Path.Combine(AppContext.BaseDirectory, ".uex-cache");
+            Directory.CreateDirectory(cache);
+            OodleHelper.Initialize(Path.Combine(cache, OodleHelper.OodleFileName));
+            ZlibHelper.Initialize(Path.Combine(cache, ZlibHelper.DllName));
+            _nativesReady = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var lazy in _providers.Values)
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
+        _providers.Clear();
+    }
+}

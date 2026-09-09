@@ -423,11 +423,19 @@ class PreviewWorker(QThread):
                 return None
         except Exception:
             return None
+        usmap = None
+        try:
+            from dualforge.unreal.uex_adapter import find_usmap
+
+            usmap = find_usmap(str(Path(self.item.archive_path).parent))
+        except Exception:
+            usmap = None
         try:
             result = bridge.preview_mesh(
                 self.item.archive_path,
                 entry,
                 aes_key=self.item.aes_key,
+                usmap=usmap,
             )
         except Exception:
             return None

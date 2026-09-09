@@ -34,6 +34,7 @@ VERSION_GAMES: Dict[int, List[str]] = {
 
 # Known games whose exact CUE4Parse EGame beats the generic engine version.
 FOLDER_GAMES: List[Tuple[str, str]] = [
+    ("tekken 8", "GAME_UE5_2"),
     ("tekken", "GAME_TEKKEN7"),
     ("fortnite", "GAME_Fortnite"),
     ("palworld", "GAME_Palworld"),
@@ -239,6 +240,8 @@ class UexAdapter:
         package holds no readable mesh (uex reports ``meshexport: none``).
         """
         paks_dir = str(Path(pak).parent)
+        if usmap is None:
+            usmap = find_usmap(paks_dir)
         game = self._game_for(paks_dir, aes_key, usmap, scheme)
         config = _write_config(
             paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,

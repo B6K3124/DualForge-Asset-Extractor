@@ -146,7 +146,7 @@ def _find_cli() -> Optional[str]:
         if found:
             return found
     for base in (Path.home() / ".dualforge", Path.cwd()):
-        for candidate in (*base.glob("CUE4ParseCLI*"), *base.glob("uex*")):
+        for candidate in (*base.glob("CUE4ParseCLI*.exe"), *base.glob("uex*.exe")):
             if candidate.is_file():
                 return str(candidate)
         if base.is_dir():
