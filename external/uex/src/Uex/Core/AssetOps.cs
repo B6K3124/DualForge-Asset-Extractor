@@ -1,11 +1,16 @@
 using CUE4Parse.FileProvider;
+using CUE4Parse.UE4.Assets.Exports;
+using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.Texture;
+using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Options;
 using CUE4Parse_Conversion.Textures;
 using Newtonsoft.Json;
+using SharpGLTF.Memory;
+using SharpGLTF.Schema2;
 
 namespace Uex.Core;
 
@@ -70,7 +75,8 @@ public static class AssetOps
     public const string SkeletalMeshKind = "skeletalmesh";
 
     /// <summary>Export the first mesh export of a package to a GLB file; returns the mesh kind or null if none found.</summary>
-    public static string? SaveMeshGLB(DefaultFileProvider provider, string vpath, string outPath)
+    /// <param name="withMaterials">Embed base-color textures in the GLB (true) or export untextured geometry only (false).</param>
+    public static string? SaveMeshGLB(DefaultFileProvider provider, string vpath, string outPath, bool withMaterials = false)
     {
         var package = provider.LoadPackage(vpath);
         var export = package.GetExports().FirstOrDefault(e => e is UStaticMesh or USkeletalMesh);
@@ -86,7 +92,7 @@ public static class AssetOps
             session.Add(export);
             var options = new ExportOptions(
                 meshFormat: EMeshFormat.Gltf2,
-                exportMaterials: false,
+                exportMaterials: withMaterials,
                 exportMorphTargets: false);
             var result = session.RunAsync(tempDir, options).GetAwaiter().GetResult()
                 .FirstOrDefault(r => r.Success);
@@ -95,12 +101,64 @@ public static class AssetOps
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
             File.Copy(glb, outPath, overwrite: true);
+            if (withMaterials)
+            {
+                EmbedBaseColorTextures(export, outPath);
+            }
             return export is UStaticMesh ? StaticMeshKind : SkeletalMeshKind;
         }
         finally
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    /// <summary>Best-effort base-color texture bake for a mesh GLB, material-slot aware.</summary>
+    private static void EmbedBaseColorTextures(UObject export, string glbPath)
+    {
+        var slots = new List<FPackageIndex?>();
+        switch (export)
+        {
+            case USkeletalMesh skeletal:
+                foreach (var material in skeletal.SkeletalMaterials)
+                    slots.Add(material.Material);
+                break;
+            case UStaticMesh staticMesh:
+                foreach (var material in staticMesh.StaticMaterials)
+                    slots.Add(material.MaterialInterface);
+                break;
+        }
+
+        var pngByName = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var index in slots)
+        {
+            if (index is not { } materialIndex) continue;
+            if (!materialIndex.TryLoad<UMaterialInterface>(out var material) || material is null) continue;
+            if (string.IsNullOrEmpty(material.Name) || pngByName.ContainsKey(material.Name)) continue;
+
+            var parameters = new CMaterialParams2();
+            material.GetParams(parameters, EMaterialDepth.AllLayers);
+            var texture = parameters.TryGetTexture2d(out var diffuse, CMaterialParams2.FallbackDiffuse)
+                ? diffuse
+                : parameters.Textures.Values.OfType<UTexture>().FirstOrDefault();
+            if (texture is null) continue;
+
+            var decoded = texture.Decode();
+            if (decoded is null) continue;
+            pngByName[material.Name] = decoded.Encode(ETextureFormat.Png, false, out _);
+        }
+
+        if (pngByName.Count == 0) return;
+
+        var model = ModelRoot.ParseGLB(File.ReadAllBytes(glbPath));
+        foreach (var material in model.LogicalMaterials)
+        {
+            if (!pngByName.TryGetValue(material.Name, out var png)) continue;
+            var image = model.UseImage(new MemoryImage(png));
+            var texture = model.UseTexture(image, null);
+            material.FindChannel("BaseColor")?.SetTexture(0, texture);
+        }
+        model.SaveGLB(glbPath);
     }
 
     /// <summary>One-line status for the CLI/MCP surfaces, also the contract DualForge parses ("meshexport: ...").</summary>

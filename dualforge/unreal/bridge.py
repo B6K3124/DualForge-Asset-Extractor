@@ -93,6 +93,36 @@ class UnrealBridge:
             dynamic_keys=dynamic_keys, scheme=scheme,
         )
 
+    def export_mesh(
+        self,
+        pak: str,
+        vpath: str,
+        out_path: str,
+        aes_key: Optional[str] = None,
+        usmap: Optional[str] = None,
+        dynamic_keys: Optional[Dict[str, str]] = None,
+        scheme: Optional[str] = None,
+    ):
+        """Export one Unreal package's mesh as a textured GLB to ``out_path``,
+        returning the mesh kind (``staticmesh`` / ``skeletalmesh``) or ``None``
+        when the package holds no readable mesh.
+
+        Requires the ``uex`` CLI with a ``preview-mesh`` command; other
+        CUE4Parse CLIs cannot produce mesh geometry.
+        """
+        self._require()
+        uex = self._uex_adapter()
+        if uex is None:
+            raise UnrealError(
+                "Unreal mesh export requires the 'uex' CLI with a 'preview-mesh' "
+                "command (https://github.com/arkive-games/uex). Point DUALFORGE_CUE4PARSE "
+                "at that build to export Unreal meshes."
+            )
+        return uex.export_mesh(
+            pak, vpath, out_path, aes_key, usmap,
+            dynamic_keys=dynamic_keys, scheme=scheme,
+        )
+
     def _require(self) -> None:
         if not self.available():
             raise UnrealError(

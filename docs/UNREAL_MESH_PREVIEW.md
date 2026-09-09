@@ -9,9 +9,11 @@ DualForge-side pieces (GLB reader, uex adapter `preview_mesh`, bridge
 passthrough, `_preview_unreal` wiring) and the uex CLI `preview-mesh` command
 (`AssetOps.SaveMeshGLB`, Program.cs command, serve dispatch, MCP tool, unit
 tests) are complete. Verified live through `bridge.preview_mesh`:
-`SK_CH_bal_dokuro.uasset` -> `skeletalmesh` GLB (4291 verts / 7138 tris) and
-`SM_CraneRig_Arm.uasset` -> `staticmesh` GLB, both parsed back by
-`dualforge.export.gltf_reader.parse_glb` into displayable geometry.
+`SK_CH_bal_dokuro.uasset` -> `skeletalmesh` GLB (4291 verts / 7138 tris),
+parsed back by `dualforge.export.gltf_reader.parse_glb` into displayable
+geometry **with UVs and baked base-color textures** (3 material slots ->
+3 embedded PNGs, `baseColorTexture` per material), and
+`SM_CraneRig_Arm.uasset` -> `staticmesh` GLB.
 
 Notes from that verification:
 - uex is vendored at `external/uex` (built from source, published to
@@ -40,6 +42,27 @@ Notes from that verification:
   routing to `UexAdapter` when the configured CLI is named `uex*`.
 - `UexAdapter` (dualforge/unreal/uex_adapter.py) writes a throwaway
   `profiles.json`, probes the EGame via `doctor`, and runs uex as a subprocess.
+- `non-preview` floating-point rect/data-URI parsing carries **TEXCOORD_0 UVs**
+  (`.uv`, each vertex `(u, v)`) and the first material's base-color texture
+  image bytes (`.texture`, via the `pbrMetallicRoughness.baseColorTexture`
+  slot, falling back to `emissiveTexture`) into a `MeshGeometry` object that
+  still unpacks like the historical 4-tuple.
+- `SaveMeshGLB` now takes `withMaterials`; with it set the exported GLB is
+  post-processed by `AssetOps.EmbedBaseColorTextures`: per material slot it
+  resolves the `UMaterialInterface`, collects params with
+  `GetParams(EMaterialDepth.AllLayers)` (diffuse override or the first texture
+  the material exposes), decodes the `UTexture`, and embeds the PNG into the
+  GLB via SharpGLTF's `UseImage`/`UseTexture` + `FindChannel("BaseColor")
+  .SetTexture`. GLB material names come from the material object's short name
+  (`MeshMaterialDto.SlotName`), so the bake matches materials by that name.
+  The whole bake is optional (`--materials`) because decoding large textures
+  is slow; `dualforge/unreal/uex_adapter.preview_mesh` adds `--materials`
+  unless `DUALFORGE_MESH_TEXTURES` is `0`/`false`/`no`.
+- The GLB reader and both viewers (GL + software) are texture-aware:
+  `parse_glb` yields `.uv`/`.texture`, `MeshPage.set_mesh` forwards them,
+  `SoftwareMeshView` rasterizes with a z-buffered affine texture mapper
+  (`rasterize_textured`) and `MeshView` uploads a `QOpenGLTexture` (flipped V),
+  binding it in `paintGL`.
 - uex `export` writes packages as JSON / textures as PNG — no geometry. In this
   repo's pinned CUE4Parse submodule the exporter is the V2 pipeline:
   `new ExportSession()` -> `session.Add(export)` (dispatches `UStaticMesh` ->
@@ -85,9 +108,11 @@ uex preview-mesh --profile dualforge --config cfg <vpath> --out out.glb
    - resolves buffer/`bufferView`/accessor binary slices (data-URI buffers
      supported too);
    - extracts POSITION / NORMAL / indices (SCALAR u16/u32) from every primitive
-     of the first mesh, derives edges from triangles;
-   - returns the same `(verts, normals, tris, edges)` tuple the Unity OBJ parser
-     produces, so it feeds `MeshPage.set_mesh` unchanged.
+     of the first mesh, derives edges from triangles, and captures
+     `TEXCOORD_0` UVs + the base-color texture's image bytes;
+   - returns a `MeshGeometry` that unpacks as the same `(verts, normals, tris,
+     edges)` tuple the Unity OBJ parser produces (plus optional `.uv` /
+     `.texture`), so it feeds `MeshPage.set_mesh` unchanged.
 2. `dualforge/unreal/uex_adapter.py` — `preview_mesh(pak, vpath, ...)`:
    - reuses `_game_for` + `_write_config`, runs `preview-mesh --out <tmp.glb>`,
      parses the summary line; returns `(bytes, kind)` on success, `None` when the

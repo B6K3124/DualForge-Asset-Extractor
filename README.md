@@ -155,7 +155,7 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 - **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
 - **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
 - **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
-- **3D preview** — wireframe + solid mesh viewer with skeleton overlay.
+- **3D preview** — wireframe + solid mesh viewer with skeleton overlay; Unreal (`.pak`) meshes are texture-mapped using baked base-color textures.
 - **FBX export** — skinned meshes with skeletons, morph targets (BlendShapes) and animation clips, as **FBX 7.4 binary** (verified importing cleanly into Blender 5.2); ASCII still available via `DUALFORGE_FBX_ASCII=1`.
 - **Audio preview** — waveform + inline playback (WAV/OGG/FLAC/raw, vgmstream for `.wem`).
 - **Videos** — `VideoClip` / `MovieTexture` streamed back to their original container (MP4/MOV/WebM/…).

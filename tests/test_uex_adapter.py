@@ -271,12 +271,35 @@ def test_preview_mesh_returns_glb_and_kind(tmp_path: Path):
             return "mounted: 1 archives, 3 files\n", "", 0
         out_flag = args[args.index("--out") + 1]
         Path(out_flag).write_bytes(glb)
+        assert "--materials" in args
         return f"meshexport: staticmesh -> {out_flag}\n", "", 0
 
     adapter = UexAdapter("fake-uex")
     adapter._run = run
     result = adapter.preview_mesh(str(pak), "Game/a.uasset", aes_key="0123")
     assert result is not None and result[0] == glb and result[1] == "staticmesh"
+
+
+def test_preview_mesh_skips_materials_when_disabled(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DUALFORGE_MESH_TEXTURES", "0")
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+    glb = b"glTF" + b"x" * 12
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        out_flag = args[args.index("--out") + 1]
+        Path(out_flag).write_bytes(glb)
+        assert "--materials" not in args
+        return f"meshexport: staticmesh -> {out_flag}\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    result = adapter.preview_mesh(str(pak), "Game/a.uasset", aes_key="0123")
+    assert result is not None and result[0] == glb
 
 
 def test_preview_mesh_none_when_no_mesh(tmp_path: Path):
@@ -346,3 +369,48 @@ def test_preview_mesh_raises_on_exit_code(tmp_path: Path):
     adapter._run = run
     with pytest.raises(UnrealError, match="boom"):
         adapter.preview_mesh(str(pak), "Game/a.uasset")
+
+
+def test_export_mesh_writes_glb(tmp_path: Path):
+    from dualforge.unreal.uex_adapter import UexAdapter
+
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+    glb = b"glTF" + b"x" * 12
+    out = tmp_path / "sub" / "model.glb"
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        assert "--materials" in args
+        out_flag = args[args.index("--out") + 1]
+        Path(out_flag).write_bytes(glb)
+        return f"meshexport: skeletalmesh -> {out_flag}\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    result = adapter.export_mesh(str(pak), "Game/a.uasset", str(out), aes_key="0123")
+    assert result == "skeletalmesh"
+    assert out.read_bytes() == glb
+
+
+def test_export_mesh_none_when_no_mesh(tmp_path: Path):
+    from dualforge.unreal.uex_adapter import UexAdapter
+
+    paks = tmp_path / "Paks"
+    paks.mkdir()
+    pak = paks / "p.pak"
+    pak.write_bytes(b"x" * 8)
+    out = tmp_path / "model.glb"
+
+    def run(args, timeout):
+        if args[0] == "doctor":
+            return "mounted: 1 archives, 3 files\n", "", 0
+        return "meshexport: none\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = run
+    assert adapter.export_mesh(str(pak), "Game/no-mesh.uasset", str(out)) is None
+    assert not out.exists()

@@ -7,6 +7,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from PySide6.QtGui import QImage
 
+from dualforge.export.gltf_reader import MeshGeometry
+
 MAX_PREVIEW_BYTES = 256 * 1024
 MAX_WAV_BYTES = 512 * 1024 * 1024
 
@@ -119,6 +121,7 @@ def _compute_normals(verts: np.ndarray, tris: np.ndarray) -> np.ndarray:
 
 def parse_obj(data: bytes):
     verts: List[Tuple[float, float, float]] = []
+    uvs: List[Tuple[float, float]] = []
     faces: List[List[int]] = []
     for line in data.decode("utf-8", "replace").splitlines():
         parts = line.split()
@@ -127,6 +130,11 @@ def parse_obj(data: bytes):
         if parts[0] == "v" and len(parts) >= 4:
             try:
                 verts.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            except ValueError:
+                continue
+        elif parts[0] == "vt" and len(parts) >= 3:
+            try:
+                uvs.append((float(parts[1]), float(parts[2])))
             except ValueError:
                 continue
         elif parts[0] == "f" and len(parts) >= 4:
@@ -154,7 +162,13 @@ def parse_obj(data: bytes):
     t = np.asarray(tri_list, dtype=np.uint32).reshape(-1, 3)
     e = np.asarray(sorted(edge_set), dtype=np.uint32).reshape(-1, 2)
     n = _compute_normals(v, t)
-    return v, n, t, e
+    uv = None
+    if uvs:
+        padded = np.zeros((len(v), 2), dtype=np.float32)
+        for i, val in enumerate(uvs[: len(v)]):
+            padded[i] = val
+        uv = padded
+    return MeshGeometry(v, n, t, e, uv=uv)
 
 
 def cache_key(archive_path: str, size: int) -> str:

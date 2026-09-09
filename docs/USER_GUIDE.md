@@ -134,6 +134,7 @@ Selecting an asset loads a preview automatically (in a background thread):
 | AudioClip (Unity) | Waveform + inline **Play/Stop** with a seek bar |
 | `.wav` / `.ogg` / `.flac` and exotic Unreal audio (`.wem`, `.fsb`, …) | Same audio page — exotic formats need **vgmstream** (§7) |
 | Mesh (Unity) | 3D viewer — **Wireframe** toggle, **Reset view**, drag to orbit; skinned meshes also render the **skeleton** (bones + joints) |
+| Mesh (Unreal) | Same 3D viewer; geometry carries UVs, and **base-color textures are baked into the preview GLB** and mapped onto the surface (`DUALFORGE_MESH_TEXTURES=0` disables the texture bake) |
 | AnimationClip (Unity) | Track summary (position/rotation/scale keyframes per node) |
 | TextAsset | Pretty-printed JSON/XML/text viewer |
 | Anything else | Hex inspector (first 256 KB shown) |

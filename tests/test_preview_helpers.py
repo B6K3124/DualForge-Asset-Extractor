@@ -56,6 +56,30 @@ def test_pil_to_qimage():
     assert qimage.pixelColor(1, 1).alpha() == 128
 
 
+def test_mesh_page_exports_glb(tmp_path, qapp, monkeypatch):
+    import numpy as np
+
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from dualforge.ui.preview import MeshPage
+
+    page = MeshPage()
+    verts = np.zeros((3, 3), dtype=np.float32)
+    tris = np.array([[0, 1, 2]], dtype=np.int32)
+    glb = b"glTF" + b"x" * 12
+    page.set_mesh((verts, np.zeros_like(verts), tris, []), glb=glb, name="hero.glb")
+    assert not page.export_btn.isHidden()
+    assert page._glb == glb
+    target = tmp_path / "hero.glb"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(target), "GLB (*.glb)")),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    page._on_export_glb()
+    assert target.read_bytes() == glb
+
+
 def test_sniff_image_gpu_textures():
     from PIL import Image
 

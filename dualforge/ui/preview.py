@@ -12,8 +12,10 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSlider,
@@ -163,15 +165,14 @@ class PreviewWorker(QThread):
             parsed = helpers.parse_obj(obj_data.encode("utf-8"))
             if parsed is None:
                 raise ValueError("mesh has no decodable geometry")
-            verts, normals, tris, edges = parsed
-            payload["mesh"] = (verts, normals, tris, edges)
+            payload["mesh"] = parsed
             bones = _preview_bones(asset, obj)
             if bones:
                 payload["bones"] = bones
             payload["meta"].update(
                 {
-                    "Vertices": str(len(verts)),
-                    "Triangles": str(len(tris)),
+                    "Vertices": str(len(parsed[0])),
+                    "Triangles": str(len(parsed[2])),
                     "Object": name or asset.path,
                 }
             )
@@ -359,7 +360,10 @@ class PreviewWorker(QThread):
                     helpers.write_cached(self.cache_dir, key, filename, cached)
         mesh_result = self._try_unreal_mesh()
         if mesh_result is not None:
-            payload["mesh"] = mesh_result
+            geometry, glb_bytes = mesh_result
+            payload["mesh"] = geometry
+            payload["glb"] = glb_bytes
+            payload["glb_name"] = f"{Path(filename).stem}.glb"
             return payload
         payload["raw"] = cached
         locres_result = _try_locres(filename, cached)
@@ -403,8 +407,9 @@ class PreviewWorker(QThread):
     def _try_unreal_mesh(self):
         """Best-effort mesh preview for an Unreal package via the uex CLI.
 
-        Returns the ``(verts, normals, tris, edges)`` tuple when the package
-        holds an exportable mesh, or ``None`` when no CLI/geometry is available
+        Returns ``(geometry, glb_bytes)`` when the package holds an
+        exportable mesh (``glb_bytes`` lets the mesh page offer a direct GLB
+        export to disk), or ``None`` when no CLI/geometry is available
         (callers fall back to generic sniffing). Only Unreal *package* entries
         (.uasset/.umap and friends) are attempted - audio, textures and other
         media are already handled by the sniffing path, so we avoid spawning a
@@ -447,7 +452,10 @@ class PreviewWorker(QThread):
         try:
             from dualforge.export.gltf_reader import parse_glb
 
-            return parse_glb(glb_bytes)
+            geometry = parse_glb(glb_bytes)
+            if geometry is None:
+                return None
+            return geometry, glb_bytes
         except Exception:
             return None
 
@@ -786,6 +794,10 @@ class MeshPage(QWidget):
         reset_btn = QPushButton("Reset view")
         reset_btn.clicked.connect(self._reset)
         toolbar.addWidget(reset_btn)
+        self.export_btn = QPushButton("Export GLB...")
+        self.export_btn.clicked.connect(self._on_export_glb)
+        self.export_btn.setVisible(False)
+        toolbar.addWidget(self.export_btn)
         toolbar.addStretch(1)
         self.stats_label = QLabel("")
         self.stats_label.setStyleSheet("color: #8b90a3;")
@@ -797,17 +809,42 @@ class MeshPage(QWidget):
         else:
             self.view = SoftwareMeshView()
         layout.addWidget(self.view, 1)
+        self._glb: Optional[bytes] = None
+        self._glb_name = "mesh.glb"
 
-    def set_mesh(self, mesh, bones=None) -> None:
+    def set_mesh(self, mesh, bones=None, glb=None, name=None) -> None:
         if self.view is None:
             return
         verts, normals, tris, edges = mesh
-        self.view.set_mesh(verts, normals, tris, edges)
+        uv = getattr(mesh, "uv", None)
+        texture = getattr(mesh, "texture", None)
+        self.view.set_mesh(verts, normals, tris, edges, uv=uv, texture=texture)
         self.view.set_bones(bones)
         label = f"{len(verts):,} vertices - {len(tris):,} triangles"
         if bones:
             label += f" - {len(bones):,} bones"
+        if texture:
+            texture_name = getattr(mesh, "texture_name", None) or ""
+            label += f" - textured ({texture_name})" if texture_name else " - textured"
         self.stats_label.setText(label)
+        self._glb = glb
+        self._glb_name = name or "mesh.glb"
+        self.export_btn.setVisible(glb is not None)
+
+    def _on_export_glb(self) -> None:
+        if not self._glb:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export GLB", self._glb_name, "GLB (*.glb)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_bytes(self._glb)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export GLB", f"Could not write GLB:\n{exc}")
+            return
+        QMessageBox.information(self, "Export GLB", "GLB written:\n" + path)
 
     def _on_wireframe(self, enabled: bool) -> None:
         if self.view is not None:
@@ -1030,7 +1067,12 @@ class PreviewPanel(QStackedWidget):
             self.meta_page.title.setText(title)
             self.meta_page.details.setText(meta_rows)
         elif "mesh" in payload:
-            self.mesh_page.set_mesh(payload["mesh"], payload.get("bones"))
+            self.mesh_page.set_mesh(
+                payload["mesh"],
+                payload.get("bones"),
+                glb=payload.get("glb"),
+                name=payload.get("glb_name"),
+            )
             self.setCurrentIndex(_PAGE_MESH)
             self.meta_page.title.setText(title)
             self.meta_page.details.setText(meta_rows)

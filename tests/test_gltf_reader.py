@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dualforge.export.gltf_reader import GltfReaderError, parse_glb, read_glb
+from dualforge.export.gltf_reader import GltfReaderError, MeshGeometry, parse_glb, read_glb
 
 
 def _glb(doc: dict, binary: bytes) -> bytes:
@@ -154,6 +154,8 @@ def test_unreal_preview_payload_contains_mesh(monkeypatch, tmp_path):
     assert len(verts) == 4
     assert len(tris) == 2
     assert len(edges) == 5
+    assert payload["glb"] == _simple_glb()
+    assert payload["glb_name"] == "a.glb"
 
 
 def test_unreal_preview_falls_back_without_mesh(monkeypatch, tmp_path):
@@ -185,3 +187,120 @@ def test_unreal_preview_falls_back_without_mesh(monkeypatch, tmp_path):
     worker = PreviewWorker(item, str(tmp_path))
     payload = worker._preview_unreal()
     assert "mesh" not in payload
+
+
+PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c626001000000ffff030000060005"
+    "57bfabd40000000049454e44ae426082"
+)
+
+
+def _textured_glb(material_override=None):
+    import base64
+
+    verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+    uvs = [(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)]
+    indices = [0, 1, 2]
+    pos_bytes = struct.pack("<9f", *[c for v in verts for c in v])
+    uv_bytes = struct.pack("<6f", *[c for uv in uvs for c in uv])
+    idx_bytes = struct.pack("<3I", *indices)
+    binary = pos_bytes + uv_bytes + idx_bytes
+    pos_off, uv_off, idx_off = 0, len(pos_bytes), len(pos_bytes) + len(uv_bytes)
+    uri = (
+        "data:image/png;base64,"
+        + base64.b64encode(PNG_BYTES).decode("ascii")
+    )
+    if material_override is None:
+        materials = [
+            {
+                "name": "Body",
+                "pbrMetallicRoughness": {
+                    "baseColorTexture": {"index": 0}
+                },
+            }
+        ]
+    elif material_override is False:
+        materials = []
+    else:
+        materials = [material_override]
+    doc = {
+                "asset": {"version": "2.0", "generator": "test"},
+                "scene": 0,
+                "scenes": [{"nodes": [0]}],
+                "nodes": [{"mesh": 0}],
+                "meshes": [
+                    {
+                        "primitives": [
+                            {
+                                "attributes": {
+                                    "POSITION": 0,
+                                    "TEXCOORD_0": 1,
+                                },
+                                "indices": 2,
+                                "mode": 4,
+                                "material": 0,
+                            }
+                        ]
+                    }
+                ],
+                "materials": materials,
+                "textures": [{"source": 0}],
+                "images": [{"name": "body.png", "uri": uri}],
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": pos_off, "byteLength": len(pos_bytes)},
+            {"buffer": 0, "byteOffset": uv_off, "byteLength": len(uv_bytes)},
+            {"buffer": 0, "byteOffset": idx_off, "byteLength": len(idx_bytes)},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"},
+            {"bufferView": 2, "componentType": 5125, "count": 3, "type": "SCALAR"},
+        ],
+    }
+    return _glb(doc, binary)
+
+
+def test_parse_glb_extracts_uv_and_texture():
+    result = parse_glb(_textured_glb())
+    assert isinstance(result, MeshGeometry)
+    verts, normals, tris, edges = result
+    assert verts.shape == (3, 3)
+    assert result.uv is not None and result.uv.shape == (3, 2)
+    assert result.uv.tolist() == [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]
+    assert result.texture == PNG_BYTES
+    assert result.texture_name == "body.png"
+
+
+def test_parse_glb_texture_falls_back_to_emissive():
+    glb = _textured_glb(material_override={
+        "name": "Glow",
+        "emissiveTexture": {"index": 0},
+    })
+    result = parse_glb(glb)
+    assert result is not None and result.texture == PNG_BYTES
+
+
+def test_parse_glb_texture_without_material_is_none():
+    glb = _textured_glb(material_override=False)
+    result = parse_glb(glb)
+    assert result is not None and result.texture is None and result.uv is not None
+
+
+def test_rasterize_textured_centers_sample():
+    from dualforge.ui.widgets.meshview import rasterize_textured
+
+    # One triangle filling the whole 8x8 surface.
+    tris = np.array([[0, 1, 2]], dtype=np.uint32)
+    vx = np.array([-1.0, 8.5, 8.5], dtype=np.float64)
+    vy = np.array([-1.0, -1.0, 8.5], dtype=np.float64)
+    vz = np.array([-1.0, -1.0, -1.0], dtype=np.float64)
+    vuv = np.array([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]], dtype=np.float64)
+    rgba = np.zeros((1, 2, 4), dtype=np.float32)
+    rgba[0] = [10.0, 20.0, 30.0, 255.0]
+    surface = np.zeros((8, 8, 4), dtype=np.float32)
+    zbuf = np.full((8, 8), np.inf, dtype=np.float32)
+    rasterize_textured(8, 8, tris, vx, vy, vz, vuv, rgba, surface, zbuf)
+    # Center pixel should have consumed the texture texel.
+    assert np.array_equal(surface[4, 4], rgba[0, 0])

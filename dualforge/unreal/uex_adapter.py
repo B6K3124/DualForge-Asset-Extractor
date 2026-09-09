@@ -258,6 +258,9 @@ class UexAdapter:
             raise UnrealError(f"uex export failed (exit {code}): {stderr.strip() or output.strip()}")
         return parse_export_summary(output)
 
+    def _mesh_materials_enabled(self) -> bool:
+        return os.getenv("DUALFORGE_MESH_TEXTURES", "1").strip().lower() not in ("0", "false", "no")
+
     def preview_mesh(
         self,
         pak: str,
@@ -294,6 +297,8 @@ class UexAdapter:
                     "--out",
                     str(out_path),
                 ]
+                if self._mesh_materials_enabled():
+                    args.append("--materials")
                 output, stderr, code = self._run(args, timeout=EXPORT_TIMEOUT)
             finally:
                 _remove(config)
@@ -311,6 +316,57 @@ class UexAdapter:
             if not glb:
                 return None
             return glb, summary
+
+    def export_mesh(
+        self,
+        pak: str,
+        vpath: str,
+        out_path: str,
+        aes_key: Optional[str] = None,
+        usmap: Optional[str] = None,
+        dynamic_keys: Optional[Dict[str, str]] = None,
+        scheme: Optional[str] = None,
+    ) -> Optional[str]:
+        """Export one Unreal package's mesh as a GLB directly to disk.
+
+        Unlike ``preview_mesh`` the GLB (with baked base-color textures when
+        ``DUALFORGE_MESH_TEXTURES`` is not disabled) lands at ``out_path``.
+        Returns the mesh kind (``staticmesh`` / ``skeletalmesh``) on success
+        or ``None`` when the package holds no readable mesh.
+        """
+        paks_dir = str(Path(pak).parent)
+        if usmap is None:
+            usmap = find_usmap(paks_dir)
+        game = self._game_for(paks_dir, aes_key, usmap, scheme)
+        config = _write_config(
+            paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,
+            dynamic_keys=dynamic_keys,
+        )
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            args = [
+                "preview-mesh",
+                "--profile",
+                "dualforge",
+                "--config",
+                str(config),
+                vpath,
+                "--out",
+                str(out),
+            ]
+            if self._mesh_materials_enabled():
+                args.append("--materials")
+            output, stderr, code = self._run(args, timeout=EXPORT_TIMEOUT)
+        finally:
+            _remove(config)
+        if code != 0:
+            raise UnrealError(
+                f"uex preview-mesh failed (exit {code}): {stderr.strip() or output.strip()}"
+            )
+        if not out.is_file() or out.stat().st_size == 0:
+            return None
+        return parse_mesh_summary(f"{output}\n{stderr}")
 
     # -------------------------------------------------------------- internals
 

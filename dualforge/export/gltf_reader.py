@@ -14,6 +14,46 @@ class GltfReaderError(Exception):
     pass
 
 
+class MeshGeometry:
+    """Mesh preview geometry that unpacks exactly like the historical 4-tuple.
+
+    ``verts, normals, tris, edges = geometry`` keeps working, while
+    ``.uv`` / ``.texture`` (optional) carry the data needed to *texture-map*
+    the model: per-vertex UVs (float32 ``(N,2)``) and the raw image bytes of
+    the first material's base-color texture.
+    """
+
+    __slots__ = ("verts", "normals", "tris", "edges", "uv", "texture", "texture_name")
+
+    def __init__(
+        self,
+        verts,
+        normals,
+        tris,
+        edges,
+        uv=None,
+        texture=None,
+        texture_name=None,
+    ) -> None:
+        self.verts = verts
+        self.normals = normals
+        self.tris = tris
+        self.edges = edges
+        self.uv = uv
+        self.texture = texture
+        self.texture_name = texture_name
+
+    def __iter__(self):
+        for item in (self.verts, self.normals, self.tris, self.edges):
+            yield item
+
+    def __len__(self) -> int:
+        return 4
+
+    def __getitem__(self, index):
+        return (self.verts, self.normals, self.tris, self.edges)[index]
+
+
 _COMPONENT_TYPES = {
     5120: ("b", 1),  # BYTE
     5121: ("B", 1),  # UNSIGNED_BYTE
@@ -37,10 +77,11 @@ _TARGET_ELEMENT_BYTE_OFFSET = 34963
 def parse_glb(data: bytes):
     """Parse a glTF 2.0 asset (binary GLB or JSON) into mesh preview geometry.
 
-    Returns ``(verts, normals, tris, edges)`` — numpy arrays matching the shape
-    the Unity OBJ path produces (see ``dualforge.ui.preview_helpers.parse_obj``):
-    verts ``float32 (N,3)``, normals ``float32 (N,3)``, tris ``uint32 (M,3)``,
-    edges ``uint32 (K,2)``. Returns ``None`` when the document holds no mesh.
+    Returns a :class:`MeshGeometry` (unpacks like ``(verts, normals, tris,
+    edges)`` — the shape the Unity OBJ path produces) with optional ``.uv``
+    (``TEXCOORD_0``, float32 ``(N,2)``) and ``.texture`` (raw image bytes of
+    the primitive's base-color material).  Returns ``None`` when the document
+    holds no mesh.
     """
     if data[:4] == b"glTF":
         doc, buffers = _read_glb(data)
@@ -57,6 +98,7 @@ def parse_glb(data: bytes):
     positions: Optional[Sequence[Sequence[float]]] = None
     normals: Optional[Sequence[Sequence[float]]] = None
     indices: Optional[Sequence[int]] = None
+    uv_list: Optional[Sequence[Sequence[float]]] = None
     has_normals_field = False
     for mesh in meshes:
         for primitive in mesh.get("primitives", []):
@@ -73,6 +115,11 @@ def parse_glb(data: bytes):
                 if read_normals is not None:
                     normals = read_normals
                     has_normals_field = True
+            uv_accessor = attributes.get("TEXCOORD_0")
+            if uv_accessor is not None:
+                read_uv = _read_accessor(doc, buffers, uv_accessor)
+                if read_uv is not None:
+                    uv_list = read_uv
             index_accessor = primitive.get("indices")
             if index_accessor is not None:
                 indices = _read_accessor(doc, buffers, index_accessor, allow_unsigned=True)
@@ -108,7 +155,20 @@ def parse_glb(data: bytes):
     e = np.asarray(sorted(edge_set), dtype=np.uint32).reshape(-1, 2)
     if not have_normals:
         n = _smooth_normals(verts, t)
-    return verts, n, t, e
+
+    uv = None
+    if uv_list is not None and len(uv_list):
+        uv = np.asarray(uv_list, dtype=np.float32).reshape(-1, 2)
+        if len(uv) < len(verts):
+            padded = np.zeros((len(verts), 2), dtype=np.float32)
+            padded[: len(uv)] = uv
+            uv = padded
+        elif len(uv) > len(verts):
+            uv = uv[: len(verts)]
+    texture, texture_name = None, None
+    if primitive_material := _resolve_material_texture(doc, buffers, primitive):
+        texture, texture_name = primitive_material
+    return MeshGeometry(verts, n, t, e, uv=uv, texture=texture, texture_name=texture_name)
 
 
 def _read_glb(data: bytes) -> Tuple[Dict[str, Any], List[bytes]]:
@@ -167,6 +227,69 @@ def _decode_data_uri(uri: str) -> bytes:
     return urllib.parse.unquote_to_bytes(payload)
 
 
+def _resolve_material_texture(
+    doc: Dict[str, Any], buffers: List[bytes], primitive: Dict[str, Any]
+) -> Optional[Tuple[bytes, str]]:
+    """Best-effort base-color texture for a glTF primitive.
+
+    Follows ``primitive.material -> pbrMetallicRoughness.baseColorTexture``
+    (falling back to a plain ``baseColorTexture`` or ``emissiveTexture``) to
+    ``textures[].source -> images[]`` and returns the decoded ``(image_bytes,
+    name)``. Images may come from a data URI or the BIN bufferView. Returns
+    ``None`` when the material/geometry carries no embeddable texture.
+    """
+    material_index = primitive.get("material")
+    if material_index is None:
+        return None
+    materials = doc.get("materials") or []
+    if not (0 <= material_index < len(materials)):
+        return None
+    material = materials[material_index]
+    texture_slots = [
+        (material.get("pbrMetallicRoughness") or {}).get("baseColorTexture"),
+        material.get("baseColorTexture"),
+        material.get("emissiveTexture"),
+    ]
+    for slot in texture_slots:
+        texture_index = (slot or {}).get("index")
+        if texture_index is None:
+            continue
+        textures = doc.get("textures") or []
+        if not (0 <= texture_index < len(textures)):
+            continue
+        image_index = textures[texture_index].get("source")
+        if image_index is None:
+            continue
+        images = doc.get("images") or []
+        if not (0 <= image_index < len(images)):
+            continue
+        image = images[image_index]
+        uri = image.get("uri")
+        if uri:
+            if uri.startswith("data:"):
+                try:
+                    return _decode_data_uri(uri), image.get("name") or "texture"
+                except GltfReaderError:
+                    return None, None
+            return None, None
+        view_index = image.get("bufferView")
+        if view_index is None:
+            continue
+        views = doc.get("bufferViews") or []
+        if not (0 <= view_index < len(views)):
+            continue
+        view = views[view_index]
+        buffer_index = view.get("buffer", 0)
+        if not (0 <= buffer_index < len(buffers)):
+            continue
+        buffer = buffers[buffer_index]
+        start = int(view.get("byteOffset", 0))
+        end = start + int(view.get("byteLength", 0))
+        if 0 <= start <= end <= len(buffer):
+            return buffer[start:end], image.get("name") or f"texture{view_index}"
+    return None
+
+
 def _read_accessor(
     doc: Dict[str, Any],
     buffers: List[bytes],
@@ -199,7 +322,7 @@ def _read_accessor(
         return None
 
     byte_offset = int(view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
-    stride = int(view.get("byteStride", 0)) or component_size
+    stride = int(view.get("byteStride", 0)) or component * component_size
     needed = byte_offset + stride * (accessor.get("count", 0) - 1) + component_size
     if needed > len(buffer):
         return None
@@ -250,6 +373,7 @@ def read_glb(path: str):
 
 __all__ = [
     "GltfReaderError",
+    "MeshGeometry",
     "parse_glb",
     "read_glb",
 ]

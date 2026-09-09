@@ -160,9 +160,12 @@ root.Subcommands.Add(previewTextureCommand);
 // ---- preview-mesh ---------------------------------------------------------
 var meshAssetArg = new Argument<string>("asset") { Description = "Virtual asset path of a mesh package" };
 var meshOutOption = new Option<string>("--out") { Description = "GLB output file path", Required = true };
+var meshMaterialsOption = new Option<bool>("--materials")
+{ Description = "Embed base-color textures in the GLB (slower/larger preview)" };
 var previewMeshCommand = new Command("preview-mesh", "Export a mesh asset to a GLB file");
 previewMeshCommand.Options.Add(profileOption);
 previewMeshCommand.Options.Add(meshOutOption);
+previewMeshCommand.Options.Add(meshMaterialsOption);
 previewMeshCommand.Arguments.Add(meshAssetArg);
 previewMeshCommand.SetAction(parse => Run(() =>
 {
@@ -170,7 +173,9 @@ previewMeshCommand.SetAction(parse => Run(() =>
     using var providers = new ProviderManager(config);
     var provider = providers.Get(parse.GetValue(profileOption)!);
     var vpath = AssetOps.ResolvePackagePath(provider, parse.GetValue(meshAssetArg)!);
-    var kind = AssetOps.SaveMeshGLB(provider, vpath, parse.GetValue(meshOutOption)!);
+    var kind = AssetOps.SaveMeshGLB(
+        provider, vpath, parse.GetValue(meshOutOption)!,
+        parse.GetValue(meshMaterialsOption));
     Console.WriteLine(AssetOps.MeshExportLine(kind, parse.GetValue(meshOutOption)!));
     return 0;
 }));
