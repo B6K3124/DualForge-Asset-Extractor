@@ -404,6 +404,7 @@ taken from — re-dump after a game update.
 |---|---|---|
 | **uex** (CUE4Parse CLI) | `.utoc`/`.ucas` IoStore, pak fallback | Settings → CUE4Parse CLI, or env var `DUALFORGE_CUE4PARSE` |
 | **USMap** (`.usmap`) | Unversioned UE5 packages (`.uasset`) — **Unreal only** | Settings → USMap, or drop the file in `~/.dualforge`; generate with **Tools ▸ Generate USMAP from Running Game...** (§6) |
+| **Engine version (EGame)** | Pick the exact CUE4Parse engine when auto-probing guesses wrongly (rare — see §9) | Env var `DUALFORGE_EGAME`, e.g. `GAME_UE5_2` |
 | **vgmstream** | Exotic audio decode + FLAC export | Settings → vgmstream, or env var `DUALFORGE_VGMSTREAM` |
 | **Oodle DLL** (`oo2core_*.dll`) | Oodle-compressed paks | Found automatically in the pak's folder chain, `Binaries/`, `~/.dualforge`, `PATH` — **never bundled or downloaded** |
 

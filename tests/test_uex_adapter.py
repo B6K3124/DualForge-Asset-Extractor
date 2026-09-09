@@ -27,6 +27,7 @@ def test_egame_candidates_footer_13():
     assert candidates.index("GAME_UE5_2") < candidates.index("GAME_TEKKEN7")
     assert "GAME_UE5_4" in candidates
     assert "GAME_UE5_LATEST" in candidates
+    assert "GAME_UE6_0" in candidates  # next-generation engines ride on v12 paks
 
 
 def test_egame_candidates_tekken7_falls_back_to_tekken7():
@@ -37,7 +38,41 @@ def test_egame_candidates_tekken7_falls_back_to_tekken7():
 
 def test_egame_candidates_unknown_footer():
     candidates = egame_candidates("E:/Games/Whatever", None)
-    assert candidates == ["GAME_UE5_LATEST", "GAME_UE4_LATEST"]
+    assert candidates == ["GAME_UE5_LATEST", "GAME_UE6_LATEST", "GAME_UE4_LATEST"]
+
+
+def test_egame_candidates_old_pak_bands():
+    assert egame_candidates("E:/Games/OldUE3", 3) == [
+        "GAME_UE3_0",
+        "GAME_UE4_LATEST",  # old-band fallback prefers UE4 over UE5
+        "GAME_UE5_LATEST",
+        "GAME_UE6_LATEST",
+    ]
+    candidates_8 = egame_candidates("E:/Games/OldUE4", 8)
+    assert candidates_8[0] == "GAME_UE4_10"
+    assert "GAME_UE4_16" in candidates_8
+    assert candidates_8.index("GAME_UE4_LATEST") < candidates_8.index("GAME_UE5_LATEST")
+    # early-UE4 (pak v4) paks get UE4.0-4.3 candidates before the fallbacks
+    candidates_4 = egame_candidates("E:/Games/OldUE4", 4)
+    assert candidates_4[:4] == [
+        "GAME_UE4_0", "GAME_UE4_1", "GAME_UE4_2", "GAME_UE4_3",
+    ]
+    assert candidates_4[4] == "GAME_UE4_LATEST"
+
+
+def test_egame_candidates_modern_band_fallback_is_ue5_first():
+    candidates = egame_candidates("E:/Games/NewGame", 12)
+    assert candidates[-3:] == ["GAME_UE5_LATEST", "GAME_UE6_LATEST", "GAME_UE4_LATEST"]
+    assert candidates.index("GAME_UE5_LATEST") < candidates.index("GAME_UE4_LATEST")
+
+
+def test_game_for_honors_dualforge_egame_override(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DUALFORGE_EGAME", " GAME_Placeholder ")
+    plan = {"doctor": (1, "", "boom")}  # probing must be skipped entirely
+    adapter = _adapter(plan)
+    game = adapter._game_for(str(tmp_path), None)
+    assert game == "GAME_Placeholder"
+    assert not adapter._run.calls
 
 
 def test_parse_search_output():

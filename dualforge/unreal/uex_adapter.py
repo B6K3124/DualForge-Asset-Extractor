@@ -12,12 +12,36 @@ from dualforge.unreal.bridge import UnrealError
 
 # CUE4Parse EGame candidates per pak index version (see docs/COMPATIBILITY.md).
 # The pak "footer version" (pak_footer_version) lags the pak version by one:
-#   footer 9  -> pak v8B  (UE 4.17-4.21)
-#   footer 10 -> pak v9   (UE 4.22-4.25)
-#   footer 11 -> pak v10  (UE 4.26-4.27)
-#   footer 12 -> pak v11  (UE 5.0-5.3)
-#   footer 13 -> pak v12  (UE 5.4+)
+#   footer 1-2  -> pak v1/v2   (UE3-era layout; UE1/UE2 have no CUE4Parse engine)
+#   footer 3    -> pak v3      (UE3)
+#   footer 4-5  -> pak v4/v5   (early UE4)
+#   footer 6    -> pak v6      (UE4.3-4.7)
+#   footer 7    -> pak v7      (UE4.5-4.9)
+#   footer 8    -> pak v8      (UE4.10-4.16)
+#   footer 9    -> pak v8B     (UE 4.17-4.21)
+#   footer 10   -> pak v9      (UE 4.22-4.25)
+#   footer 11   -> pak v10     (UE 4.26-4.27)
+#   footer 12   -> pak v11     (UE 5.0-5.3)
+#   footer 13   -> pak v12     (UE 5.4+)
+# Footers 3-8 are approximate engine ranges: pre-4.14 paks are versioned
+# (they carry their own FPackageFileVersion), so a nearby EGame still
+# serializes them correctly. The engine band of the footer also decides the
+# generic fallback order (_fallback_games).
 VERSION_GAMES: Dict[int, List[str]] = {
+    3: ["GAME_UE3_0"],
+    4: ["GAME_UE4_0", "GAME_UE4_1", "GAME_UE4_2", "GAME_UE4_3"],
+    5: ["GAME_UE4_0", "GAME_UE4_1", "GAME_UE4_2", "GAME_UE4_3", "GAME_UE4_4"],
+    6: ["GAME_UE4_3", "GAME_UE4_4", "GAME_UE4_5", "GAME_UE4_6", "GAME_UE4_7"],
+    7: ["GAME_UE4_5", "GAME_UE4_6", "GAME_UE4_7", "GAME_UE4_8", "GAME_UE4_9"],
+    8: [
+        "GAME_UE4_10",
+        "GAME_UE4_11",
+        "GAME_UE4_12",
+        "GAME_UE4_13",
+        "GAME_UE4_14",
+        "GAME_UE4_15",
+        "GAME_UE4_16",
+    ],
     9: ["GAME_UE4_17", "GAME_UE4_18", "GAME_UE4_19", "GAME_UE4_20", "GAME_UE4_21"],
     10: ["GAME_UE4_22", "GAME_UE4_23", "GAME_UE4_24", "GAME_UE4_25"],
     11: ["GAME_UE4_26", "GAME_UE4_27", "GAME_UE4_28"],
@@ -29,6 +53,7 @@ VERSION_GAMES: Dict[int, List[str]] = {
         "GAME_UE5_7",
         "GAME_UE5_8",
         "GAME_UE5_9",
+        "GAME_UE6_0",
     ],
 }
 
@@ -97,6 +122,15 @@ def find_usmap(paks_dir: str) -> Optional[str]:
     return None
 
 
+def _fallback_games(footer_version: Optional[int]) -> List[str]:
+    """Engine-band-aware catch-alls tried only when folder/version hints bear
+    no fruit, so an old pak is never mis-serialized as UE5 (and a future UE6
+    pak still has a candidate)."""
+    if footer_version is not None and footer_version < 12:
+        return ["GAME_UE4_LATEST", "GAME_UE5_LATEST", "GAME_UE6_LATEST"]
+    return ["GAME_UE5_LATEST", "GAME_UE6_LATEST", "GAME_UE4_LATEST"]
+
+
 def egame_candidates(paks_dir: str, footer_version: Optional[int]) -> List[str]:
     """Ordered list of EGame names to try for a pak folder."""
     candidates: List[str] = []
@@ -108,7 +142,7 @@ def egame_candidates(paks_dir: str, footer_version: Optional[int]) -> List[str]:
         for game in VERSION_GAMES.get(footer_version, []):
             if game not in candidates:
                 candidates.append(game)
-    for game in ("GAME_UE5_LATEST", "GAME_UE4_LATEST"):
+    for game in _fallback_games(footer_version):
         if game not in candidates:
             candidates.append(game)
     return candidates
@@ -299,6 +333,14 @@ class UexAdapter:
         cached = self._games.get(paks_dir)
         if cached:
             return cached
+        # An explicit DUALFORGE_EGAME value beats every heuristic (use it to
+        # force an exact engine for games this build of CUE4Parse cannot guess,
+        # e.g. a future/unknown UE release).
+        override = os.environ.get("DUALFORGE_EGAME")
+        if override and override.strip():
+            override = override.strip()
+            self._games[paks_dir] = override
+            return override
         # A known scheme maps to a definitive GameType; prefer it over probing.
         if scheme and scheme in SCHEME_GAMES:
             self._games[paks_dir] = SCHEME_GAMES[scheme]
