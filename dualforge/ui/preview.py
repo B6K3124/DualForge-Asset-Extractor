@@ -405,11 +405,17 @@ class PreviewWorker(QThread):
 
         Returns the ``(verts, normals, tris, edges)`` tuple when the package
         holds an exportable mesh, or ``None`` when no CLI/geometry is available
-        (callers fall back to generic sniffing).
+        (callers fall back to generic sniffing). Only Unreal *package* entries
+        (.uasset/.umap and friends) are attempted - audio, textures and other
+        media are already handled by the sniffing path, so we avoid spawning a
+        uex subprocess for them.
         """
         from dualforge.unreal import UnrealBridge
 
-        if not self.item.archive_path or not self.item.entry:
+        entry = self.item.entry or self.item.title
+        if not self.item.archive_path or not entry:
+            return None
+        if not _looks_like_unreal_package(entry):
             return None
         try:
             bridge = UnrealBridge()
@@ -420,7 +426,7 @@ class PreviewWorker(QThread):
         try:
             result = bridge.preview_mesh(
                 self.item.archive_path,
-                self.item.entry,
+                entry,
                 aes_key=self.item.aes_key,
             )
         except Exception:
@@ -600,6 +606,15 @@ def _try_locres(filename: str, data: bytes) -> Optional[tuple]:
         "Version": str(locres.version or "detected"),
     }
     return text, meta
+
+
+def _looks_like_unreal_package(entry: str) -> bool:
+    """True when ``entry`` is a Unreal package file that ``preview_mesh``
+    can reasonably handle (.uasset/.umap). Audio, texture and other
+    media entries are already covered by the generic sniffing path, so
+    skipping them avoids an unnecessary uex subprocess call."""
+    name = entry.lower()
+    return name.endswith((".uasset", ".umap"))
 
 
 def _extra_unity_meta(obj, type_name: str) -> dict:

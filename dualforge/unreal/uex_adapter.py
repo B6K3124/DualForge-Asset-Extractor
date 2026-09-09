@@ -244,36 +244,36 @@ class UexAdapter:
             paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,
             dynamic_keys=dynamic_keys,
         )
-        out_path = Path(tempfile.mkstemp(suffix=".glb", prefix="dualforge_mesh_")[1])
-        try:
-            args = [
-                "preview-mesh",
-                "--profile",
-                "dualforge",
-                "--config",
-                str(config),
-                vpath,
-                "--out",
-                str(out_path),
-            ]
-            output, stderr, code = self._run(args, timeout=EXPORT_TIMEOUT)
-        finally:
-            _remove(config)
-        if code != 0:
-            raise UnrealError(f"uex preview-mesh failed (exit {code}): {stderr.strip() or output.strip()}")
-        combined = f"{output}\n{stderr}"
-        if "meshexport: none" in combined:
-            return None
-        summary = parse_mesh_summary(combined)
-        if not out_path.is_file():
-            raise UnrealError("uex preview-mesh reported success but wrote no GLB")
-        try:
+        with tempfile.TemporaryDirectory(prefix="dualforge_mesh_") as tmp_dir:
+            out_path = Path(tmp_dir) / "mesh.glb"
+            try:
+                args = [
+                    "preview-mesh",
+                    "--profile",
+                    "dualforge",
+                    "--config",
+                    str(config),
+                    vpath,
+                    "--out",
+                    str(out_path),
+                ]
+                output, stderr, code = self._run(args, timeout=EXPORT_TIMEOUT)
+            finally:
+                _remove(config)
+            if code != 0:
+                raise UnrealError(
+                    f"uex preview-mesh failed (exit {code}): {stderr.strip() or output.strip()}"
+                )
+            combined = f"{output}\n{stderr}"
+            if "meshexport: none" in combined:
+                return None
+            summary = parse_mesh_summary(combined)
+            if not out_path.is_file():
+                raise UnrealError("uex preview-mesh reported success but wrote no GLB")
             glb = out_path.read_bytes()
-        finally:
-            _remove(out_path)
-        if not glb:
-            return None
-        return glb, summary
+            if not glb:
+                return None
+            return glb, summary
 
     # -------------------------------------------------------------- internals
 

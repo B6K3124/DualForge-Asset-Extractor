@@ -43,3 +43,13 @@ include = ["dualforge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# Pin the rule set explicitly so `ruff check` is stable across ruff releases.
+# Without a config, newer ruff versions enable a broader default rule set
+# (UP/B/S/SIM/RUF typing-modernisation etc.) that this codebase does not target.
+select = ["E4", "E7", "E9", "F"]

@@ -4,9 +4,11 @@ Goal: let DualForge render Unreal `UStaticMesh` / `USkeletalMesh` assets from `.
 archives inside the existing 3D preview viewport (the same mesh page Unity uses),
 reusing the `MeshView` / `SoftwareMeshView` pipeline.
 
-Status: plan. The DualForge-side pieces (GLB reader, uex adapter `preview_mesh`,
-bridge passthrough, `_preview_unreal` wiring) are implemented; the **uex CLI side
-is not committed anywhere yet** and is required for end-to-end mesh preview.
+Status: DualForge-side pieces (GLB reader, uex adapter `preview_mesh`, bridge
+passthrough, `_preview_unreal` wiring) are implemented and tested; the **uex CLI
+`preview-mesh` command is implemented** (`AssetOps.SaveMeshGLB`, Program.cs
+command, serve dispatch, MCP tool, unit tests) but not yet committed/pushed to
+the uex repo, and end-to-end verification against a real game pak is pending.
 
 ## Background
 
@@ -20,12 +22,16 @@ is not committed anywhere yet** and is required for end-to-end mesh preview.
   routing to `UexAdapter` when the configured CLI is named `uex*`.
 - `UexAdapter` (dualforge/unreal/uex_adapter.py) writes a throwaway
   `profiles.json`, probes the EGame via `doctor`, and runs uex as a subprocess.
-- uex `export` writes packages as JSON / textures as PNG — no geometry.
-- CUE4Parse supports mesh->GLB natively:
-  `new MeshExporter(uStaticMesh, ELodFormat.FirstLod, exportMaterials:false,
-  EMeshFormat.Gltf2)` emits `.glb` (skeletal meshes emit skinned GLB including
-  the armature). A V2 API (`StaticMeshExporter`/`SkeletalMeshExporter` +
-  `GltfMeshFormat`) also exists.
+- uex `export` writes packages as JSON / textures as PNG — no geometry. In this
+  repo's pinned CUE4Parse submodule the exporter is the V2 pipeline:
+  `new ExportSession()` -> `session.Add(export)` (dispatches `UStaticMesh` ->
+  `StaticMeshExporter`, `USkeletalMesh` -> `SkeletalMeshExporter`) ->
+  `session.RunAsync(outDir, new ExportOptions(meshFormat: EMeshFormat.Gltf2,
+  exportMaterials: false, exportMorphTargets: false))`. The `GltfMeshFormat`
+  writer emits binary GLB (`Model.WriteGLB()`), one file per LOD; skeletal GLB
+  includes the armature. Exported paths are derived from the package path, so a
+  preview command runs the session into a temp dir and copies the produced
+  `.glb` to its `--out` target.
 
 ## uex CLI changes (external repo)
 
@@ -35,17 +41,24 @@ Add a `preview-mesh` command mirroring the existing `preview-texture`:
 uex preview-mesh --profile dualforge --config cfg <vpath> --out out.glb
 ```
 
-- `src/Uex/Core/AssetOps.cs`: load the package; find the first `UStaticMesh`/
-  `USkeletalMesh`/`USkeleton` export; run `MeshExporter` with
-  `ELodFormat.FirstLod`, `exportMaterials:false`, `EMeshFormat.Gltf2`; write the
-  LOD's bytes to `--out`.
-- If the package contains no mesh export, print `meshexport: none` and exit 0 so
-  the app falls back to its normal sniff-based preview.
+- `src/Uex/Core/AssetOps.cs`: `SaveMeshGLB` loads the package, finds the first
+  `UStaticMesh`/`USkeletalMesh` export, runs the V2 `ExportSession` pipeline
+  into a temp dir with `EMeshFormat.Gltf2` (`ExportMaterials: false`,
+  `ExportMorphTargets: false`), copies the first LOD's `.glb` to `--out`, and
+  returns the mesh kind. Also exposes the kind constants
+  (`AssetOps.StaticMeshKind`/`SkeletalMeshKind`) and the status-line formatter
+  `AssetOps.MeshExportLine(kind, path)` — the single source of the
+  `meshexport: ...` contract.
+- If the package contains no mesh export, return null so callers print
+  `meshexport: none` and exit 0; the app then falls back to its normal
+  sniff-based preview.
 - On success print a one-line summary (e.g. `meshexport: staticmesh -> out.glb`)
   for the app to parse.
 - Register the command in `Program.cs`, the `Serve/` JSON-lines protocol, and the
-  `Mcp/` tool list (e.g. `preview_mesh`).
-- Pure-logic unit tests in `Uex.Tests` (no paks required), mirroring existing tests.
+  `Mcp/` tool list (`preview_mesh`).
+- Pure-logic unit tests in `Uex.Tests` (`AssetOpsTests.cs`): `MeshExportLine`
+  formatting and kind constants — no paks required, mirroring the existing tests.
+  Full `SaveMeshGLB` export needs a real pak (integration, not unit).
 
 ## DualForge changes (implemented)
 
@@ -86,8 +99,8 @@ carries `preview-mesh`.
 - Preview-only, best-effort scope; no `convert`/export-format wiring.
 - uex must ship `preview-mesh`; until then DualForge degrades to current sniff
   preview.
-- NaNite-only meshes (UE5.3+) may expose no normal LOD0 — the uex command should
-  fall back to `ENaniteMeshFormat` nanite decode or report `none`.
+- NaNite-only meshes (UE5.3+) may expose no render-data LOD0 — the exporter then
+  yields no files and `SaveMeshGLB` reports `none` (graceful fallback).
 - Skeletal meshes reference a `USkeleton` that may fail to load — tolerate and
   report `none`; `set_bones` overlay is a follow-up.
 - `.umap` worlds can hold mesh exports too — out of initial scope; the single

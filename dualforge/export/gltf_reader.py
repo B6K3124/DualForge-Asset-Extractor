@@ -204,9 +204,6 @@ def _read_accessor(
     if needed > len(buffer):
         return None
 
-    dtype = _ARRAY_TYPE_TO_DTYPE.get(component_type)
-    if dtype is None:
-        return None
     values: List[Any] = []
     for i in range(int(accessor.get("count", 0))):
         offset = byte_offset + i * stride
