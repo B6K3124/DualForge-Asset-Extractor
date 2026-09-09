@@ -186,6 +186,36 @@ Full details: [`docs/COMPRESSION.md`](docs/COMPRESSION.md) · [`docs/COMPATIBILI
 
 ---
 
+## Compatibility
+
+DualForge is built around the *file formats*, not the games — so it keeps working
+across engine generations. A per-archive best-effort engine version is shown in
+the GUI (parsed from the bundle/serialized header or the pak footer).
+
+### Unity
+
+| | |
+|---|---|
+| Containers | `.assets`, `.unity3d`, `.bundle` + stream files (`.resS`, `.resource`, `.split*`, `.resA`, `.resH`) |
+| Engines | Unity **2017 → current (Unity 6 / 6000.x)** — UnityPy reads the serialized/asset-bundle format, which is version-agnostic; DualForge never gates on the engine build |
+| Verified | Unity 2021.3 (Raft, CarX, Tabletop Simulator) |
+
+### Unreal
+
+| | |
+|---|---|
+| Native `.pak` (pure Python) | pak v8B–v12 = **UE 4.17 – 5.8** |
+| Via uex/CUE4Parse bridge | older pak footers + all IoStore (`.utoc`/`.ucas`); auto-probed EGame covers **UE3 → UE6.0** (footer-driven bands, `DUALFORGE_EGAME` to force) |
+| Unversioned packages | UE5.3+ `.uasset` need a `.usmap` — auto-found in `~/.dualforge` / `DUALFORGE_USMAP`, or dumped from the running game |
+| Encryption / compression | AES-256 natively, multi-scheme AES/custom via the bridge; Oodle unpacked with the game's own `oo2core_*.dll` (never bundled) |
+| Verified | TEKKEN 8 (UE5, pak v12): 279,410 files / 100 archives; raw + texture + `.wem` extraction, skeletal & static **mesh preview** in the 3D viewport |
+
+**Known gaps:** `.usmap` files must match the game build (re-dump after updates);
+paks encrypted with fully custom schemes need their keys/scheme configured;
+very old UE1/UE2 paks have no CUE4Parse engine and are best-effort only.
+
+---
+
 ## Architecture
 
 ```
