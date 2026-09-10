@@ -287,6 +287,13 @@ class PreviewWorker(QThread):
         payload["kind"] = "file"
         key = helpers.cache_key(str(self.item.entry or ""), self.item.size)
         filename = Path(self.item.entry or self.item.title).name or "file.bin"
+        mesh_result = self._try_unreal_mesh()
+        if mesh_result is not None:
+            geometry, glb_bytes = mesh_result
+            payload["mesh"] = geometry
+            payload["glb"] = glb_bytes
+            payload["glb_name"] = f"{Path(filename).stem}.glb"
+            return payload
         cached = None
         if self.item.native_archive is not None:
             cached = helpers.read_cached(self.cache_dir, key, filename)
@@ -324,13 +331,6 @@ class PreviewWorker(QThread):
                         raise ValueError("no file was extracted for preview")
                     cached = candidate.read_bytes()
                     helpers.write_cached(self.cache_dir, key, filename, cached)
-        mesh_result = self._try_unreal_mesh()
-        if mesh_result is not None:
-            geometry, glb_bytes = mesh_result
-            payload["mesh"] = geometry
-            payload["glb"] = glb_bytes
-            payload["glb_name"] = f"{Path(filename).stem}.glb"
-            return payload
         payload["raw"] = cached
         _sniff_resource(payload, filename, cached, self.cache_dir, key)
         return payload

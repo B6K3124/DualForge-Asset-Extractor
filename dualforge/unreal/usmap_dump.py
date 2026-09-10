@@ -26,8 +26,13 @@ PAGE_READABLE = (
 
 _READ_CHUNK = 4 * 1024 * 1024
 
-_LAYOUT_MSB = "msb"  # wide flag = bit 15, length = bits 0-14 (UE4.25-UE5.0)
-_LAYOUT_LSB = "lsb"  # wide flag = bit 0, length = bits 1-15 (UE5.1+)
+_LAYOUT_MSB = "msb"    # wide flag = bit 15, length = bits 0-14 (UE4.25-UE5.0)
+_LAYOUT_LSB = "lsb"    # wide flag = bit 0, length = bits 1-15 (UE5.1)
+_LAYOUT_PACKED = "packed"  # length = bits 6-15, index = bits 0-5 (UE5.2+; aligned 2)
+
+# Packed-layout FNamePool starts straight with the header bytes + canonical
+# names (no NUL separators).
+FNAME_ANCHOR_PACKED = b"\x1e\x01None\x10\x03ByteProperty\xc0\x02IntProperty"
 
 
 class UsmapDumpError(Exception):
@@ -164,6 +169,15 @@ class _ProcessReader:
                 yield int(info.BaseAddress or 0), int(info.RegionSize)
             address = int(info.BaseAddress or 0) + int(info.RegionSize)
 
+    def region(self, address: int) -> Tuple[int, int]:
+        """Return (base, size) of the mapped region containing address."""
+        info = self._memory_basic_info()
+        if self._kernel32.VirtualQueryEx(
+            self.handle, ctypes.c_void_p(address), ctypes.byref(info), ctypes.sizeof(info)
+        ) == 0:
+            raise UsmapDumpError(f"VirtualQueryEx failed at 0x{address:X}")
+        return int(info.BaseAddress or 0), int(info.RegionSize)
+
     def scan(self, pattern: bytes) -> List[int]:
         """Find all occurrences of pattern in readable memory."""
         hits: List[int] = []
@@ -197,9 +211,12 @@ def _parse_entry(block: bytes, offset: int, layout: str) -> Optional[Tuple[str, 
     if layout == _LAYOUT_MSB:
         wide = bool(header & 0x8000)
         length = header & 0x7FFF
-    else:
+    elif layout == _LAYOUT_LSB:
         wide = bool(header & 0x0001)
         length = header >> 1
+    else:  # packed: length (10 bits) in bits 6-15, index in bits 0-5
+        wide = False
+        length = header >> 6
     if length == 0:
         return None
     offset += 2
@@ -213,13 +230,16 @@ def _parse_entry(block: bytes, offset: int, layout: str) -> Optional[Tuple[str, 
         name = raw.decode("utf-8", errors="replace")
     if name.endswith("\x00"):
         name = name[:-1]
-    return name, offset + size
+    next_offset = offset + size
+    if layout == _LAYOUT_PACKED and (next_offset & 1):
+        next_offset += 1  # packed entries are 2-byte aligned
+    return name, next_offset
 
 
 def _detect_layout(block: bytes) -> Optional[str]:
     """Identify the header bit layout from the canonical first names."""
     expected = ("None", "ByteProperty", "IntProperty", "BoolProperty")
-    for layout in (_LAYOUT_MSB, _LAYOUT_LSB):
+    for layout in (_LAYOUT_PACKED, _LAYOUT_MSB, _LAYOUT_LSB):
         offset = 0
         ok = True
         for want in expected:
@@ -276,6 +296,9 @@ def scan_fname_pool(pid: int, anchor: bytes = FNAME_ANCHOR) -> FNamePool:
     _check_windows()
     reader = _ProcessReader(pid)
     try:
+        hits = reader.scan(FNAME_ANCHOR_PACKED)
+        if hits:
+            return _scan_packed_pool(reader, hits[0])
         hits = reader.scan(anchor)
         if not hits:
             raise UsmapDumpError("FNamePool anchor not found (is this a UE5 game?)")
@@ -293,6 +316,30 @@ def scan_fname_pool(pid: int, anchor: bytes = FNAME_ANCHOR) -> FNamePool:
         return pool
     finally:
         reader.close()
+
+
+def _scan_packed_pool(reader: _ProcessReader, block0_base: int) -> FNamePool:
+    """Walk the contiguous name arena of a packed (UE5.2+) FNamePool."""
+    region_base, region_size = reader.region(block0_base)
+    offset_in_region = block0_base - region_base
+    to_read = min(region_size - offset_in_region, 1 << 24)
+    if to_read <= 0:
+        raise UsmapDumpError("FNamePool arena not readable")
+    data = reader.read(block0_base, to_read)
+    layout = _detect_layout(data[:FNAME_BLOCK_SIZE])
+    if layout is None:
+        raise UsmapDumpError("could not detect FNameEntry header layout")
+    pool = FNamePool(pool_base=block0_base, block0_base=block0_base)
+    names = pool.names
+    offset = 0
+    while offset + 2 <= len(data):
+        parsed = _parse_entry(data, offset, layout)
+        if parsed is None:
+            break
+        name, offset = parsed
+        names.append(name)
+    pool.block_count = max(1, to_read // FNAME_BLOCK_SIZE)
+    return pool
 
 
 def usmap_from_names(names: List[str]):
