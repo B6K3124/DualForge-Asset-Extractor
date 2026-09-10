@@ -226,6 +226,25 @@ BUILTIN_DRIVERS = [
         author="DualForge",
     ),
     GameDriver(
+        name="oblivion-remastered",
+        label="The Elder Scrolls IV: Oblivion Remastered",
+        engine="unreal",
+        game_fragments=["Oblivion Remastered", "OblivionRemastered"],
+        archive_patterns=["OblivionRemastered-*.pak", "pakchunk*-Windows.pak"],
+        encryption_scheme="aes-256",
+        egame="GAME_UE5_3",
+        usmap_required=True,
+        notes=(
+            "2025 Unreal Engine 5.3 IoStore re-release (pak + utoc + ucas). "
+            "Publicly known AES-256 key: "
+            "0xDFA62F3EE8304BBF7A6E153F2F88203F823C47BF0A690D3D4793FB3EFA624F3F. "
+            "Requires a .usmap (FModel DUMP/USMAP mustlist import) and egame "
+            "GAME_UE5_3. Set DUALFORGE_EGAME=GAME_UE5_3 if key lookup fails."
+        ),
+        tags=["bethesda", "rpg", "unreal", "remaster"],
+        author="DualForge",
+    ),
+    GameDriver(
         name="valorant",
         label="VALORANT",
         engine="unreal",

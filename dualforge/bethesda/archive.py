@@ -138,7 +138,7 @@ class BethesdaArchive:
     # ── BSA parsing ───────────────────────────────────────────────────
     def _parse_bsa(self) -> None:
         data = self._content
-        if len(data) < 36:
+        if len(data) < 32:
             raise BethesdaError("BSA header truncated")
 
         magic, version, folder_offset, flags, folder_count, file_count, \
@@ -147,27 +147,138 @@ class BethesdaArchive:
             )
 
         if version == 0x67:
-            # v103: 32-byte header, no file_flags / padding.
-            self.version = 103
-            file_flags = 0
-        else:
-            if len(data) < 36:
-                raise BethesdaError("BSA header truncated")
-            file_flags, = struct.unpack_from("<H", data, 32)
-            self.version = VERSION_BY_INT.get(version)
-            if self.version is None:
-                raise BethesdaError(f"unsupported BSA version 0x{version:x}")
+            self._parse_bsa_v103(
+                folder_offset, flags, folder_count, file_count,
+                folder_names_len, file_names_len,
+            )
+            return
+
+        # v104 (Fallout 4) / v105 (Skyrim SE): 36-byte header adds a
+        # file-flags u16 + padding, and every folder record points at its own
+        # content block (folder name followed by the folder's 16-byte file
+        # records). All file names live in a dedicated NUL-terminated block
+        # stored after the content blocks.
+        if len(data) < 36:
+            raise BethesdaError("BSA header truncated")
+        file_flags, = struct.unpack_from("<H", data, 32)
+        self.version = VERSION_BY_INT.get(version)
+        if self.version is None:
+            raise BethesdaError(f"unsupported BSA version 0x{version:x}")
 
         self.flags = flags
         self.file_flags = file_flags
         self.directory_names_length = folder_names_len
         self.file_names_length = file_names_len
 
-        new_style = self.version >= 105
-        self._folders: List[Dict[str, object]] = []
+        dirs_named = bool(flags & FLAG_DIRECTORIES_NAMED)
+        files_named = bool(flags & FLAG_FILES_NAMED)
+        arch_compressed = bool(flags & FLAG_FILES_COMPRESSED)
 
-        folder_rec_size = 24 if new_style else 16
-        folder_rec_end = folder_offset + folder_count * folder_rec_size
+        # Folder records: v105 pads a u32 before and after the real u32 offset.
+        dir_size = 24 if self.version >= 105 else 16
+        records_end = folder_offset + folder_count * dir_size
+        if records_end > len(data):
+            raise BethesdaError("BSA folder records out of range")
+
+        folders: List[Dict[str, int]] = []
+        for i in range(folder_count):
+            pos = folder_offset + i * dir_size
+            if self.version >= 105:
+                (hash_, cnt, _pre, offset, _post) = struct.unpack_from(
+                    "<QIIII", data, pos
+                )
+            else:
+                (hash_, cnt, offset) = struct.unpack_from("<QII", data, pos)
+            folders.append({"hash": hash_, "file_count": cnt, "offset": offset})
+
+        # File-name block: one NUL-terminated string per file, in
+        # folder-major/file order, located right after the content blocks.
+        # Header folder_names_len counts the name bytes (plus trailing NUL per
+        # folder) but not the u8 length byte that prefixes every folder name, so
+        # the folder-name region spans folder_names_len + one byte per folder.
+        names_region = 0
+        if dirs_named:
+            names_region = folder_names_len + folder_count
+        file_names_offset = records_end + names_region + file_count * 16
+        file_names: List[str] = []
+        if files_named:
+            if file_names_offset > len(data):
+                raise BethesdaError("BSA file name table out of range")
+            pos = file_names_offset
+            for _ in range(file_count):
+                end = data.find(b"\x00", pos)
+                if end < pos:
+                    raise BethesdaError("BSA file name out of range")
+                file_names.append(self._clean_bsa_name(data[pos:end]))
+                pos = end + 1
+
+        # Each folder's content block = [u8-len folder name + bytes + NUL]
+        # followed by 16-byte file records (hash, size+flags, data offset). The
+        # stored folder offset points past the file-name block, so the real
+        # content offset subtracts total_file_name_length.
+        files: List[_BSAFile] = []
+        idx = 0
+        for folder in folders:
+            content_pos = folder["offset"] - file_names_len
+            folder_name = ""
+            if dirs_named or files_named:
+                if content_pos < 0 or content_pos >= len(data):
+                    raise BethesdaError("BSA folder name out of range")
+                name_len = data[content_pos]
+                content_pos += 1
+                if content_pos + name_len > len(data):
+                    raise BethesdaError("BSA folder name out of range")
+                folder_name = self._clean_bsa_name(
+                    data[content_pos : content_pos + name_len]
+                )
+                content_pos += name_len  # no trailing NUL in v104/105 names
+            for _ in range(folder["file_count"]):
+                if content_pos + 16 > len(data):
+                    raise BethesdaError("BSA file record out of range")
+                (hash_, size_flags, offset) = struct.unpack_from(
+                    "<QII", data, content_pos
+                )
+                content_pos += 16
+                size = size_flags & FILE_SIZE_MASK
+                bit_compressed = bool(size_flags & FILE_COMPRESSED_MASK)
+                if arch_compressed:
+                    compressed = not bit_compressed
+                else:
+                    compressed = bit_compressed
+                fname = file_names[idx] if idx < len(file_names) else ""
+                idx += 1
+                files.append(
+                    _BSAFile(
+                        path=self._join(folder_name, fname),
+                        offset=offset,
+                        size=size,
+                        compressed=compressed,
+                    )
+                )
+
+        self._bsa_files = files
+
+    def _parse_bsa_v103(
+        self, folder_offset: int, flags: int, folder_count: int,
+        file_count: int, folder_names_len: int, file_names_len: int,
+    ) -> None:
+        """v103 (Oblivion / Fallout 3 / New Vegas / Skyrim 2011).
+
+        The 32-byte header carries no file-flags, and folder blocks - each a
+        folder name followed by its 16-byte file records - are laid out linearly
+        right after the folder-record table, with embedded file names after
+        them.
+        """
+        data = self._content
+        self.version = 103
+        self.flags = flags
+        self.file_flags = 0
+        self.directory_names_length = folder_names_len
+        self.file_names_length = file_names_len
+
+        dirs_named = bool(flags & FLAG_DIRECTORIES_NAMED)
+        files_named = bool(flags & FLAG_FILES_NAMED)
+        folder_rec_end = folder_offset + folder_count * 16
         if folder_rec_end > len(data):
             raise BethesdaError("BSA folder records out of range")
 
@@ -175,15 +286,8 @@ class BethesdaArchive:
         folders = []
         pos = folder_offset
         for _ in range(folder_count):
-            if version == 0x67:
-                (hash_, cnt, name_off) = struct.unpack_from("<QII", data, pos)
-                pos += 16
-            elif new_style:
-                (hash_, cnt, _unk, name_off) = struct.unpack_from("<QIIQ", data, pos)
-                pos += 24
-            else:
-                (hash_, cnt, name_off) = struct.unpack_from("<QII", data, pos)
-                pos += 16
+            (hash_, cnt, name_off) = struct.unpack_from("<QII", data, pos)
+            pos += 16
             folders.append(
                 {"hash": hash_, "file_count": cnt, "name_offset": name_off}
             )
@@ -191,10 +295,6 @@ class BethesdaArchive:
         # Folder blocks + file records are stored contiguously after the
         # folder-record table (each folder's file records follow its name).
         pos = folder_rec_end
-        dirs_named = bool(flags & FLAG_DIRECTORIES_NAMED)
-        files_named = bool(flags & FLAG_FILES_NAMED)
-        folder_paths: List[str] = []
-
         folder_blocks = []
         for folder in folders:
             name = ""
@@ -217,11 +317,9 @@ class BethesdaArchive:
                     records.append((name, offset, size, compressed, None))
                 else:
                     records.append((name, offset, size, compressed, hash_))
-            folder_paths.append(name)
             folder_blocks.append(records)
 
-        # Embedded file names (v104/105, or when the container was packed with
-        # per-folder name embedding) are stored directly after folder blocks.
+        # Embedded file names are stored directly after folder blocks.
         file_names: List[str] = []
         if files_named:
             for _ in range(file_count):
@@ -261,7 +359,8 @@ class BethesdaArchive:
 
     @staticmethod
     def _join(folder: str, name: str) -> str:
-        parts = [p for p in (folder + "/" + name).split("/") if p]
+        raw = folder.replace("\\", "/") + "/" + name.replace("\\", "/")
+        parts = [p for p in raw.split("/") if p]
         return "/".join(parts)
 
     # ── BA2 parsing ───────────────────────────────────────────────────
@@ -396,6 +495,21 @@ class BethesdaArchive:
         self._dx10_names = names
 
     # ── public API ────────────────────────────────────────────────────
+    def size_of(self, name: str) -> int:
+        """Return the stored (on-disk) size of a single entry, without reading it."""
+        name = name.replace("\\", "/").lstrip("./")
+        if self.format == "BSA":
+            for f in self._bsa_files:
+                if f.path == name:
+                    return f.size
+        else:
+            for e in self._ba2_entries:
+                if e.path == name:
+                    if isinstance(e, _BA2Texture):
+                        return sum(c["unpacked_size"] for c in e.chunks)
+                    return e.packed_size if e.compressed else e.unpacked_size
+        raise BethesdaError(f"no such entry: {name}")
+
     def list_files(self) -> Iterator[str]:
         """Yield the normalized (forward-slash) relative path of every entry."""
         if self.format == "BSA":

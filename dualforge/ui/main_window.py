@@ -54,7 +54,36 @@ from dualforge.ui.tree_builder import (
 from dualforge.unity import UnityArchive
 from dualforge.unreal import KeyStore, PakArchive, PakError, UnrealBridge
 
-ARCHIVE_SUFFIXES = (".pak", ".utoc", ".ucas", ".unity3d", ".unityweb", ".bundle", ".assets", ".assetbundle", ".archive")
+ARCHIVE_SUFFIXES = (".pak", ".utoc", ".ucas", ".unity3d", ".unityweb", ".bundle", ".assets", ".assetbundle", ".archive", ".bsa", ".ba2")
+
+_BETHESDA_KINDS = {
+    ".dds": "texture",
+    ".png": "texture",
+    ".jpg": "texture",
+    ".jpeg": "texture",
+    ".tga": "texture",
+    ".bmp": "texture",
+    ".nif": "mesh",
+    ".wav": "audio",
+    ".fuz": "audio",
+    ".xwm": "audio",
+    ".mp3": "audio",
+    ".ogg": "audio",
+    ".txt": "text",
+    ".json": "text",
+    ".xml": "text",
+    ".csv": "text",
+    ".hlsl": "text",
+    ".fx": "text",
+    ".hkx": "anim",
+    ".kf": "anim",
+    ".bto": "terrain",
+    ".btr": "terrain",
+}
+
+
+def _bethesda_kind(name: str) -> str:
+    return _BETHESDA_KINDS.get(Path(name).suffix.lower(), "file")
 
 
 class WorkerSignals(QObject):
@@ -195,6 +224,7 @@ class MainWindow(QMainWindow):
         self._unity_engine_versions: Dict[str, Tuple[str, int]] = {}
         self.pak_archives: Dict[str, PakArchive] = {}
         self._cdpr_archives: Dict[str, object] = {}
+        self._bethesda_archives: Dict[str, object] = {}
         self.unreal_entries: List[str] = []
         self._tree_builder: Optional[AssetTreeBuilder] = None
         self._folder_mode = False
@@ -509,11 +539,18 @@ class MainWindow(QMainWindow):
             self,
             "Open game archive",
             self.settings.default_out_dir or "",
-            "Game archives (*.pak *.utoc *.ucas *.unity3d *.bundle *.assets *.assetbundle);;All files (*)",
+            "Game archives (*.pak *.utoc *.ucas *.unity3d *.bundle *.assets *.assetbundle *.bsa *.ba2);;All files (*)",
         )
         if not path:
             return
         self._load(path)
+
+    def load(self, path: str) -> None:
+        """Open an archive file or a folder of archives (used by --open)."""
+        if Path(path).is_dir():
+            self.open_folder(path)
+        else:
+            self._load(path)
 
     def _reset_session(self, folder_mode: bool = False) -> None:
         self._folder_mode = folder_mode
@@ -526,6 +563,7 @@ class MainWindow(QMainWindow):
         self._unity_engine_versions.clear()
         self.pak_archives.clear()
         self._cdpr_archives.clear()
+        self._bethesda_archives.clear()
         self.unreal_entries = []
         self.tree.clear()
         self._tree_builder = AssetTreeBuilder(self.tree)
@@ -572,6 +610,8 @@ class MainWindow(QMainWindow):
                 self._load_unreal(path)
             elif detection.engine == "cdpr":
                 self._load_cdpr(path)
+            elif detection.engine == "bethesda":
+                self._load_bethesda(path)
             elif detection.engine == "container":
                 self._load_container(path)
             else:
@@ -726,6 +766,40 @@ class MainWindow(QMainWindow):
         self.item_count.setText(f"{len(entries)} files")
         return len(entries)
 
+    def _load_bethesda(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+        from dualforge.bethesda import BethesdaArchive, BethesdaError
+
+        try:
+            archive = BethesdaArchive(path)
+        except BethesdaError as exc:
+            self.log.appendPlainText(f"failed to open Bethesda archive: {exc}")
+            return 0
+        self._bethesda_archives[path] = archive
+        if root is not None:
+            builder = AssetTreeBuilder(self.tree, root=root)
+            self._tree_builder = builder
+        entries = list(archive.list_files())
+        for entry in entries:
+            size = 0
+            try:
+                size = archive.size_of(entry)
+            except Exception:
+                pass
+            kind = _bethesda_kind(entry)
+            self._add_file(
+                path,
+                entry,
+                kind,
+                size,
+                {"engine": "bethesda", "path": entry, "kind": kind, "archive": path, "size": size},
+                root,
+            )
+        self.log.appendPlainText(
+            f"loaded {len(entries)} {archive.format} files from {Path(path).name}"
+        )
+        self.item_count.setText(f"{len(entries)} files")
+        return len(entries)
+
     def _load_container(self, path: str) -> None:
         container_dir = Path(self.settings.cache_dir()) / Path(path).stem
         container_dir.mkdir(parents=True, exist_ok=True)
@@ -793,6 +867,8 @@ class MainWindow(QMainWindow):
                     count = self._load_unreal(path, root)
                 elif detection.engine == "cdpr":
                     count = self._load_cdpr(path, root)
+                elif detection.engine == "bethesda":
+                    count = self._load_bethesda(path, root)
                 else:
                     continue
                 total += count
@@ -968,6 +1044,19 @@ class MainWindow(QMainWindow):
                     meta={"Engine": "REDengine", "Hash": data.get("hash", ""), "Source": Path(archive).name},
                 )
             )
+        elif engine == "bethesda":
+            self.preview_panel.request_preview(
+                PreviewItem(
+                    title=path,
+                    engine="bethesda",
+                    kind=data.get("kind", "file"),
+                    size=data.get("size") or 0,
+                    entry=path,
+                    archive_path=archive,
+                    native_archive=self._bethesda_archives.get(archive),
+                    meta={"Engine": "Bethesda", "Type": data.get("kind", "file"), "Source": Path(archive).name},
+                )
+            )
         elif engine == "file" or engine == "container":
             written = data.get("path", "")
             self.preview_panel.request_preview(
@@ -1016,6 +1105,13 @@ class MainWindow(QMainWindow):
                 ("Type", "file"),
                 ("Engine", "REDengine"),
                 ("Hash", data.get("hash", "")),
+                ("Source", Path(archive).name),
+            ]
+        elif engine == "bethesda":
+            rows += [
+                ("Type", data.get("kind", "file")),
+                ("Size", f"{data.get('size') or 0:,} bytes"),
+                ("Engine", "Bethesda"),
                 ("Source", Path(archive).name),
             ]
         self.properties_table.setRowCount(len(rows))
@@ -1539,6 +1635,8 @@ class MainWindow(QMainWindow):
                     count = self._load_unreal(path, root)
                 elif detection.engine == "cdpr":
                     count = self._load_cdpr(path, root)
+                elif detection.engine == "bethesda":
+                    count = self._load_bethesda(path, root)
                 else:
                     self.log.appendPlainText(
                         f"skipping non-extractable archive: {Path(path).name}"

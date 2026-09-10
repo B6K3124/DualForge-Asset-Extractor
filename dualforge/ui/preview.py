@@ -92,6 +92,8 @@ class PreviewWorker(QThread):
                 payload = self._preview_file()
             elif self.item.engine == "cdpr":
                 payload = self._preview_cdpr()
+            elif self.item.engine == "bethesda":
+                payload = self._preview_bethesda()
             else:
                 payload = self._preview_unreal()
         except Exception as exc:
@@ -276,44 +278,8 @@ class PreviewWorker(QThread):
             raise ValueError(f"file not found: {path}")
         data = path.read_bytes()
         payload["raw"] = data
-        locres_result = _try_locres(path.name, data)
-        if locres_result is not None:
-            text, locres_meta = locres_result
-            payload["text"] = text
-            payload["meta"].update(locres_meta)
-            return payload
-        image = helpers.sniff_image(data)
-        if image is not None:
-            payload["image"] = image
-            payload["meta"].update(
-                {
-                    "Width": str(image.width()),
-                    "Height": str(image.height()),
-                    "Decoded": "image",
-                    "Format": path.suffix.lstrip(".").upper() or "BIN",
-                }
-            )
-            return payload
         key = helpers.cache_key(str(path), len(data))
-        audio = helpers.sniff_audio(data, path.name, self.cache_dir, key)
-        if audio is not None:
-            payload["audio_path"] = audio["audio_path"]
-            payload["peaks"] = audio["peaks"]
-            payload["duration"] = audio["duration"]
-            payload["sample_rate"] = audio["sample_rate"]
-            payload["channels"] = audio["channels"]
-            payload["meta"].update(
-                {
-                    "Decoded": "audio",
-                    "Format": path.suffix.lstrip(".").upper() or "BIN",
-                }
-            )
-            return payload
-        if helpers.guess_text(data):
-            payload["text"] = _pretty_text(data)
-            payload["meta"]["Decoded"] = "yes (utf-8)"
-        else:
-            payload["meta"]["Decoded"] = "no"
+        _sniff_resource(payload, path.name, data, self.cache_dir, key)
         return payload
 
     def _preview_unreal(self) -> dict:
@@ -366,42 +332,7 @@ class PreviewWorker(QThread):
             payload["glb_name"] = f"{Path(filename).stem}.glb"
             return payload
         payload["raw"] = cached
-        locres_result = _try_locres(filename, cached)
-        if locres_result is not None:
-            text, locres_meta = locres_result
-            payload["text"] = text
-            payload["meta"].update(locres_meta)
-            return payload
-        image = helpers.sniff_image(cached)
-        if image is not None:
-            payload["image"] = image
-            payload["meta"].update(
-                {
-                    "Width": str(image.width()),
-                    "Height": str(image.height()),
-                    "Decoded": "image",
-                }
-            )
-            return payload
-        audio = helpers.sniff_audio(cached, filename, self.cache_dir, key)
-        if audio is not None:
-            payload["audio_path"] = audio["audio_path"]
-            payload["peaks"] = audio["peaks"]
-            payload["duration"] = audio["duration"]
-            payload["sample_rate"] = audio["sample_rate"]
-            payload["channels"] = audio["channels"]
-            payload["meta"].update(
-                {
-                    "Decoded": "audio",
-                    "Format": Path(filename).suffix.lstrip(".").upper() or "BIN",
-                }
-            )
-            return payload
-        if helpers.guess_text(cached):
-            payload["text"] = _pretty_text(cached)
-            payload["meta"]["Decoded"] = "yes (utf-8)"
-        else:
-            payload["meta"]["Decoded"] = "no"
+        _sniff_resource(payload, filename, cached, self.cache_dir, key)
         return payload
 
     def _try_unreal_mesh(self):
@@ -477,42 +408,37 @@ class PreviewWorker(QThread):
             helpers.write_cached(self.cache_dir, key, filename, raw)
             cached = raw
         payload["raw"] = cached
-        locres_result = _try_locres(filename, cached)
-        if locres_result is not None:
-            text, locres_meta = locres_result
-            payload["text"] = text
-            payload["meta"].update(locres_meta)
-            return payload
-        image = helpers.sniff_image(cached)
-        if image is not None:
-            payload["image"] = image
-            payload["meta"].update(
-                {
-                    "Width": str(image.width()),
-                    "Height": str(image.height()),
-                    "Decoded": "image",
-                }
-            )
-            return payload
-        audio = helpers.sniff_audio(cached, filename, self.cache_dir, key)
-        if audio is not None:
-            payload["audio_path"] = audio["audio_path"]
-            payload["peaks"] = audio["peaks"]
-            payload["duration"] = audio["duration"]
-            payload["sample_rate"] = audio["sample_rate"]
-            payload["channels"] = audio["channels"]
-            payload["meta"].update(
-                {
-                    "Decoded": "audio",
-                    "Format": Path(filename).suffix.lstrip(".").upper() or "BIN",
-                }
-            )
-            return payload
-        if helpers.guess_text(cached):
-            payload["text"] = _pretty_text(cached)
-            payload["meta"]["Decoded"] = "yes (utf-8)"
-        else:
-            payload["meta"]["Decoded"] = "no"
+        _sniff_resource(payload, filename, cached, self.cache_dir, key)
+        return payload
+
+    def _preview_bethesda(self) -> dict:
+        payload = self._base_payload()
+        payload["kind"] = "file"
+        archive = self.item.native_archive
+        entry_name = self.item.entry or self.item.title
+        if archive is None:
+            raise ValueError("no Bethesda archive loaded for preview")
+        key = helpers.cache_key(str(entry_name), self.item.size)
+        filename = Path(entry_name).name or "file.bin"
+        cached = helpers.read_cached(self.cache_dir, key, filename)
+        if cached is None:
+            try:
+                raw = archive.open_file(entry_name)
+            except Exception as exc:
+                raise ValueError(f"Bethesda archive read failed: {exc}") from exc
+            helpers.write_cached(self.cache_dir, key, filename, raw)
+            cached = raw
+        payload["raw"] = cached
+        if filename.lower().endswith(".nif"):
+            try:
+                from dualforge.bethesda.nif import parse_nif, read_geometry
+
+                geometry = read_geometry(parse_nif(cached))
+                if geometry is not None:
+                    payload["mesh"] = geometry
+            except Exception:
+                pass
+        _sniff_resource(payload, filename, cached, self.cache_dir, key)
         return payload
 
 
@@ -622,6 +548,58 @@ def _try_locres(filename: str, data: bytes) -> Optional[tuple]:
         "Version": str(locres.version or "detected"),
     }
     return text, meta
+
+
+def _sniff_resource(
+    payload: dict,
+    filename: str,
+    data: bytes,
+    cache_dir: str,
+    key: str,
+) -> None:
+    """Mutate ``payload`` with decoded image / audio / text preview data.
+
+    Used by the file, Unreal, CDPR and Bethesda preview drivers so every
+    extracted-on-disk payload sniffs identically (locres → image → audio →
+    text).
+    """
+    locres_result = _try_locres(filename, data)
+    if locres_result is not None:
+        text, locres_meta = locres_result
+        payload["text"] = text
+        payload["meta"].update(locres_meta)
+        return
+    image = helpers.sniff_image(data)
+    if image is not None:
+        payload["image"] = image
+        payload["meta"].update(
+            {
+                "Width": str(image.width()),
+                "Height": str(image.height()),
+                "Decoded": "image",
+                "Format": Path(filename).suffix.lstrip(".").upper() or "BIN",
+            }
+        )
+        return
+    audio = helpers.sniff_audio(data, filename, cache_dir, key)
+    if audio is not None:
+        payload["audio_path"] = audio["audio_path"]
+        payload["peaks"] = audio["peaks"]
+        payload["duration"] = audio["duration"]
+        payload["sample_rate"] = audio["sample_rate"]
+        payload["channels"] = audio["channels"]
+        payload["meta"].update(
+            {
+                "Decoded": "audio",
+                "Format": Path(filename).suffix.lstrip(".").upper() or "BIN",
+            }
+        )
+        return
+    if helpers.guess_text(data):
+        payload["text"] = _pretty_text(data)
+        payload["meta"]["Decoded"] = "yes (utf-8)"
+    else:
+        payload["meta"]["Decoded"] = "no"
 
 
 def _looks_like_unreal_package(entry: str) -> bool:

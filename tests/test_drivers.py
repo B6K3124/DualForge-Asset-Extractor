@@ -183,7 +183,7 @@ def test_registry_has_popular_moddable_games():
     names = registry.names()
     expect = [
         # bethesda
-        "oblivion", "fallout-new-vegas",
+        "oblivion", "fallout-new-vegas", "oblivion-remastered",
         # unity
         "valheim", "subnautica", "grounded", "cities-skylines",
         "kerbal-space-program", "sons-of-the-forest", "seven-days-to-die",

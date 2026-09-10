@@ -30,16 +30,30 @@ def test_main_known_cli_command_routes_to_cli(monkeypatch):
 def test_main_unknown_arg_falls_back_to_gui(monkeypatch):
     called = []
 
-    def fake_gui():
-        called.append(1)
+    def fake_gui(open_path=None):
+        called.append(open_path)
         return 7
 
     monkeypatch.setattr(_main, "_run_gui", fake_gui)
     assert _main.main(["something-random"]) == 7
-    assert called == [1]
+    assert called == [None]
 
 
 def test_main_gui_flags_force_gui(monkeypatch):
-    monkeypatch.setattr(_main, "_run_gui", lambda: 5)
+    monkeypatch.setattr(_main, "_run_gui", lambda open_path=None: 5)
     assert _main.main(["--gui"]) == 5
     assert _main.main(["-g"]) == 5
+
+
+def test_main_open_flag_forwards_path(monkeypatch):
+    captured = []
+
+    def fake_gui(open_path=None):
+        captured.append(open_path)
+        return 5
+
+    monkeypatch.setattr(_main, "_run_gui", fake_gui)
+    assert _main.main(["--open", r"C:\Game\Data\Skyrim - Misc.bsa"]) == 5
+    assert captured == [r"C:\Game\Data\Skyrim - Misc.bsa"]
+    assert _main.main(["-o", r"C:\Game\Data\Meshes.bsa"]) == 5
+    assert captured == [r"C:\Game\Data\Skyrim - Misc.bsa", r"C:\Game\Data\Meshes.bsa"]

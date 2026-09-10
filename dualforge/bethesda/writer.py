@@ -52,6 +52,11 @@ def build_bsa(
     ``files`` is a sequence of (relative_path, folder_name, data).
     When ``compress`` is True the default-archive compressed flag is set and
     every file payload is stored zlib (v<105) / LZ4-frame (v105) compressed.
+
+    For v104/105 the archive is written in the real offset-based layout used by
+    Fallout 4 / Skyrim Special Edition (folder records pointing at content
+    blocks, folder names as ``u8-length + bytes + NUL``, and a separate
+    NUL-terminated file-name block); v103 keeps the classic linear layout.
     """
     if version == 103:
         version_int = 0x67
@@ -72,14 +77,21 @@ def build_bsa(
         by_folder[folder].append((rel, data))
 
     folders = [(folder, by_folder[folder]) for folder in ordered]
+    flattened = [
+        (folder, rel, data) for folder, entries in folders for rel, data in entries
+    ]
 
     archive_flags = FLAG_DIRECTORIES_NAMED | FLAG_FILES_NAMED
     if compress:
         archive_flags |= FLAG_FILES_COMPRESSED
 
-    new_style = version >= 105
+    if version != 103:
+        return _build_bsa_v104_105(
+            folders, flattened, version, version_int, archive_flags, compress
+        )
 
-    # ── assemble name + file-record region (folder blocks) ──────────
+    # ── v103 classic linear layout ───────────────────────────────────
+    # assemble name + file-record region (folder blocks)
     folder_blocks = bytearray()
     folder_records = bytearray()
     all_file_count = 0
@@ -93,20 +105,14 @@ def build_bsa(
             folder_blocks += struct.pack("<QII", _hash(rel), size_flags, 0)
         cnt = len(entries)
         all_file_count += cnt
-        # folder record: (v105: hash+count+unk then u64 name offset) / (<105: u32 offset)
-        if new_style:
-            folder_records += struct.pack("<QIIQ", _hash(folder), cnt, 0, 0)
-        else:
-            folder_records += struct.pack("<QII", _hash(folder), cnt, 0)
+        folder_records += struct.pack("<QII", _hash(folder), cnt, 0)
 
-    # ── file names (CString-style, uvarint-prefixed without NUL) ────
+    # file names (CString-style, uvarint-prefixed without NUL)
     file_names = bytearray()
     for rel, folder, _data in files:
         file_names += _uvarint_prefixed(rel.split("/")[-1])
 
-    # header sizes: v103 = 32 bytes; v104/105 = 32 + fileFlags(2) + pad(2).
-    header_size = 32 if version == 103 else 36
-
+    header_size = 32
     folder_name_bytes = sum(
         len(_uvarint_prefixed(folder)) for folder, _ in folders
         if archive_flags & FLAG_DIRECTORIES_NAMED
@@ -125,29 +131,18 @@ def build_bsa(
     header += struct.pack("<I", all_file_count)
     header += struct.pack("<I", folder_name_bytes)
     header += struct.pack("<I", sum(len(_uvarint_prefixed(f.split("/")[-1])) for f, _f, _d in files))
-    if version != 103:
-        header += struct.pack("<HH", 0, 0)  # file_flags + padding
 
-    # ── build file data ──────────────────────────────────────────────
+    # build file data
     data = bytearray()
     file_offsets = []
     blob_sizes = []
     for rel, folder_name, content in files:
-        if compress:
-            if version >= 105:
-                import lz4.frame
-
-                payload_stream = lz4.frame.compress(content)
-            else:
-                payload_stream = zlib.compress(content)
-            blob = struct.pack("<I", len(content)) + payload_stream
-        else:
-            blob = content
+        blob, = _encode_blob(content, version, compress)
         file_offsets.append(data_offset + len(data))
         blob_sizes.append(len(blob))
         data += blob
 
-    # ── rewrite folder blocks with real file data offsets ───────────
+    # rewrite folder blocks with real file data offsets
     folder_blocks2 = bytearray()
     fi = 0
     for folder, entries in folders:
@@ -162,6 +157,100 @@ def build_bsa(
 
     out = bytes(header) + bytes(folder_records) + bytes(folder_blocks2) + bytes(file_names) + bytes(data)
     return out
+
+
+def _build_bsa_v104_105(
+    folders, flattened, version, version_int, archive_flags, compress,
+) -> bytes:
+    """Write the real Fallout 4 / Skyrim SE (v104 / v105) byte layout."""
+    dir_size = 24 if version >= 105 else 16
+    header_size = 36
+
+    # File-name block: one NUL-terminated base name per file, folder-major.
+    file_name_blob = bytearray()
+    for _folder, entries in folders:
+        for rel, _data in entries:
+            file_name_blob += rel.split("/")[-1].encode("utf-8") + b"\x00"
+
+    # Content blocks: [folder name][16-byte file records], one per folder, laid
+    # out right after the folder-record table (folder names are stored inline
+    # at the head of each folder's block, not in a separate region).
+    content_region = header_size + len(folders) * dir_size
+    content_length = sum(
+        1 + len(folder.encode("utf-8")) + 16 * len(entries)
+        for folder, entries in folders
+    )
+    data_offset = content_region + content_length + len(file_name_blob)
+
+    # File data blobs (offsets relative to data_offset).
+    data = bytearray()
+    blob_sizes = []
+    for _dir, _rel, content in flattened:
+        blob, = _encode_blob(content, version, compress)
+        blob_sizes.append(len(blob))
+        data += blob
+
+    # Content blocks with real per-file offsets.
+    content_blocks = bytearray()
+    stored_dir_offsets = []  # content pos + total_file_name_length
+    fi = 0
+    content_pos = content_region
+    for folder, entries in folders:
+        stored_dir_offsets.append(content_pos + len(file_name_blob))
+        raw = folder.encode("utf-8")
+        content_blocks += struct.pack("<B", len(raw)) + raw
+        for _rel, _data in entries:
+            # In a compressed-by-default archive the FileRecord size bit is
+            # CLEAR for compressed files (set = stored raw); matches the reader.
+            size_flags = blob_sizes[fi] & FILE_SIZE_MASK
+            content_blocks += struct.pack(
+                "<QII", _hash(_rel), size_flags,
+                data_offset + sum(blob_sizes[:fi]),
+            )
+            fi += 1
+        content_pos += 1 + len(raw) + 16 * len(entries)
+
+    # Folder records in folder order.
+    folder_records = bytearray()
+    for i, (folder, entries) in enumerate(folders):
+        stored_offset = stored_dir_offsets[i]
+        if version >= 105:
+            folder_records += struct.pack("<QIIII", _hash(folder), len(entries), 0, stored_offset, 0)
+        else:
+            folder_records += struct.pack("<QII", _hash(folder), len(entries), stored_offset)
+
+    header = bytearray()
+    header += BSA_MAGIC
+    header += struct.pack("<I", version_int)
+    header += struct.pack("<I", header_size)
+    header += struct.pack("<I", archive_flags)
+    header += struct.pack("<I", len(folders))
+    header += struct.pack("<I", len(flattened))
+    header += struct.pack(
+        "<I", sum(len(folder.encode("utf-8")) for folder, _ in folders)
+    )
+    header += struct.pack("<I", len(file_name_blob))
+    header += struct.pack("<HH", 0, 0)  # file_flags + padding
+
+    return (
+        bytes(header)
+        + bytes(folder_records)
+        + bytes(content_blocks)
+        + bytes(file_name_blob)
+        + bytes(data)
+    )
+
+
+def _encode_blob(content: bytes, version: int, compress: bool):
+    """Return the on-disk blob for one file (``(u32 size + stream)`` when
+    compressed, the raw bytes otherwise)."""
+    if not compress:
+        return (content,)
+    if version >= 105:
+        import lz4.frame
+
+        return (struct.pack("<I", len(content)) + lz4.frame.compress(content),)
+    return (struct.pack("<I", len(content)) + zlib.compress(content),)
 
 
 def _hash(name: str) -> int:
