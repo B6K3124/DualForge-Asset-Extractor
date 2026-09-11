@@ -57,6 +57,9 @@ class PreviewItem:
     aes_key: Optional[str] = None
     archive_path: str = ""
     native_archive: object = None
+    usmap: Optional[str] = None
+    scheme: Optional[str] = None
+    egame: Optional[str] = None
     meta: Dict[str, str] = field(default_factory=dict)
 
     def identity(self) -> tuple:
@@ -317,11 +320,20 @@ class PreviewWorker(QThread):
             if cached is None:
                 with tempfile.TemporaryDirectory(prefix="dualforge_preview_") as temp_dir:
                     try:
+                        _usmap = self.item.usmap
+                        if not _usmap or not Path(_usmap).is_file():
+                            from dualforge.unreal.uex_adapter import find_usmap
+
+                            paks_dir = str(Path(self.item.archive_path).parent)
+                            _usmap = find_usmap(paks_dir)
                         bridge.extract(
                             self.item.archive_path,
                             temp_dir,
                             aes_key=self.item.aes_key,
                             files=[self.item.entry or self.item.title],
+                            usmap=_usmap,
+                            scheme=self.item.scheme,
+                            egame=self.item.egame,
                         )
                     except Exception as exc:
                         raise ValueError(f"preview extract failed: {exc}") from exc
@@ -363,7 +375,9 @@ class PreviewWorker(QThread):
         try:
             from dualforge.unreal.uex_adapter import find_usmap
 
-            usmap = find_usmap(str(Path(self.item.archive_path).parent))
+            usmap = self.item.usmap
+            if not usmap or not Path(usmap).is_file():
+                usmap = find_usmap(str(Path(self.item.archive_path).parent))
         except Exception:
             usmap = None
         try:
@@ -372,6 +386,8 @@ class PreviewWorker(QThread):
                 entry,
                 aes_key=self.item.aes_key,
                 usmap=usmap,
+                scheme=self.item.scheme,
+                egame=self.item.egame,
             )
         except Exception:
             return None

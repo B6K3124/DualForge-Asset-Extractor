@@ -41,6 +41,7 @@ class ExtractOptions:
     driver: Optional[object] = None
     scheme: Optional[str] = None
     scheme_params: Optional[dict] = None
+    egame: Optional[str] = None
     progress: Optional[Progress] = None
     is_cancelled: Optional[Cancel] = None
 
@@ -60,7 +61,7 @@ def extract_file(path: str, options: ExtractOptions) -> ExtractResult:
         driver = registry.get(driver)
     driver = driver if isinstance(driver, GameDriver) else None
     if driver is not None:
-        _apply_driver(options, driver)
+        _apply_driver(options, driver, path)
     detection = detect(path)
     result.detected = detection
     if detection is None:
@@ -84,7 +85,7 @@ def extract_file(path: str, options: ExtractOptions) -> ExtractResult:
     return result
 
 
-def _apply_driver(options: ExtractOptions, driver) -> None:
+def _apply_driver(options: ExtractOptions, driver, path: str) -> None:
     """Apply a game driver's config onto extract options.
 
     Only fills in values the caller did not already provide, so explicit
@@ -104,10 +105,15 @@ def _apply_driver(options: ExtractOptions, driver) -> None:
         options.scheme = driver.encryption_scheme
     if not options.scheme_params and driver.encryption_params:
         options.scheme_params = dict(driver.encryption_params)
-    # usmap hint
+    # exact CUE4Parse EGame for this title
+    if not options.egame and getattr(driver, "egame", None):
+        options.egame = driver.egame
+    # usmap hint: search the archive's Paks folder, not the export target
     if driver.usmap_required and not options.usmap:
+        from pathlib import Path
 
-        options.usmap = _find_usmap_hint(options.out_dir)
+        paks_dir = str(Path(path).parent)
+        options.usmap = _find_usmap_hint(paks_dir)
 
 
 def _extract_unity(path: str, detection: Detection, options: ExtractOptions, result: ExtractResult) -> None:
@@ -226,7 +232,7 @@ def _extract_unreal_bridge(path: str, options: ExtractOptions, result: ExtractRe
             pass
     entries = bridge.list_files(
         path, aes_key=options.aes_key, usmap=usmap,
-        dynamic_keys=dynamic_keys, scheme=scheme,
+        dynamic_keys=dynamic_keys, scheme=scheme, egame=options.egame,
     )
     if options.files:
         entries = [e for e in entries if e.get("path") in set(options.files)]
@@ -243,6 +249,7 @@ def _extract_unreal_bridge(path: str, options: ExtractOptions, result: ExtractRe
                 usmap=usmap,
                 dynamic_keys=dynamic_keys,
                 scheme=scheme,
+                egame=options.egame,
             )
         except UnrealError as exc:
             result.errors.append(f"{exc}{_chunk_key_hint(path)}")

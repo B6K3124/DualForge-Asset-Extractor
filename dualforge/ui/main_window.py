@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from html import escape
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -218,6 +219,8 @@ class MainWindow(QMainWindow):
         self.current_path: Optional[str] = None
         self.current_executable: Optional[str] = None
         self.current_engine: Optional[str] = None
+        self.current_driver = None
+        self._usmap_prompt_done = False
         self.unity_archive: Optional[UnityArchive] = None
         self._unity_archives: Dict[str, UnityArchive] = {}
         self.unity_assets: Dict[Tuple[str, str], object] = {}
@@ -427,6 +430,12 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(drivers_action)
 
         help_menu = menu_bar.addMenu("&Help")
+        compat_action = QAction("Video Game Compatibility...", self)
+        compat_action.setToolTip(
+            "Compatibility guide for supported engines, formats and game drivers"
+        )
+        compat_action.triggered.connect(self.open_compatibility)
+        help_menu.addAction(compat_action)
         about_action = QAction("About DualForge", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
@@ -492,6 +501,11 @@ class MainWindow(QMainWindow):
         self.engine_badge.setProperty("role", "badge")
         self.driver_badge = QLabel()
         self.driver_badge.setProperty("role", "badge")
+        self.driver_badge.setTextFormat(Qt.TextFormat.RichText)
+        self.driver_badge.setOpenExternalLinks(False)
+        self.driver_badge.linkActivated.connect(self.open_drivers)
+        self.driver_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.driver_badge.setToolTip("Click to manage game drivers")
         self.item_count = QLabel()
         self.item_count.setProperty("role", "badge")
         self.preview_note = QLabel("Ready")
@@ -506,12 +520,24 @@ class MainWindow(QMainWindow):
         self._set_driver(None)
 
     def _set_driver(self, driver) -> None:
+        self.current_driver = driver
         if driver is None:
             self.driver_badge.setText("")
             self.driver_badge.setStyleSheet("")
+            self.driver_badge.setToolTip("Click to manage game drivers")
             return
-        self.driver_badge.setText(f"driver: {driver.name}")
-        self.driver_badge.setStyleSheet("color: #e0a53c;")
+        name = escape(driver.name)
+        parts = [p for p in (getattr(driver, "label", None), getattr(driver, "engine", None), getattr(driver, "encryption_scheme", None)) if p]
+        detail = " · ".join(parts)
+        text = f'driver: <a href="drivers" style="color:#e0a53c;">{name}</a>'
+        if detail:
+            text += f' <span style="color:#c8cbd8;">· {escape(detail)}</span>'
+        self.driver_badge.setText(text)
+        self.driver_badge.setStyleSheet("")
+        self.driver_badge.setToolTip(
+            getattr(driver, "notes", None)
+            or "Click to manage game drivers"
+        )
 
     def _set_engine(self, engine: Optional[str], detail: str = "") -> None:
         colors = {"unity": "#4fae6d", "unreal": "#4f8fd0", "container": "#e0a53c"}
@@ -714,7 +740,37 @@ class MainWindow(QMainWindow):
                     "(the 'uex' CLI is the maintained option).",
                 )
             return 0
-        entries = bridge.list_files(path, aes_key=self.settings.default_aes_key or None)
+        driver = getattr(self, "current_driver", None)
+        usmap = self.settings.usmap_path or None
+        if driver is not None and getattr(driver, "usmap_required", False) and not self._usmap_prompt_done:
+            from dualforge.unreal.uex_adapter import find_usmap
+
+            paks_dir = str(Path(path).parent)
+            found = usmap or find_usmap(paks_dir)
+            if found:
+                usmap = found
+            else:
+                choice = self._prompt_for_usmap(driver, path)
+                if choice == "generate":
+                    self.open_usmap_dump()
+                    usmap = self.settings.usmap_path or find_usmap(paks_dir)
+                elif choice == "pick":
+                    usmap = self._pick_usmap_file()
+                if usmap:
+                    self.settings.usmap_path = usmap
+                self._usmap_prompt_done = True
+                if not usmap:
+                    self.log.appendPlainText(
+                        f"note: the {driver.name} driver requires a .usmap mappings "
+                        "file for unversioned packages - open Settings > Usmap or place "
+                        "one in ~/.dualforge (Tools > Generate USMAP can create it)."
+                    )
+        entries = bridge.list_files(
+            path,
+            aes_key=self.settings.default_aes_key or None,
+            usmap=usmap,
+            egame=getattr(self.current_driver, "egame", None) or None,
+        )
         paths = [str(e.get("path", e)) for e in entries]
         if root is not None:
             builder = AssetTreeBuilder(self.tree, root=root)
@@ -1028,6 +1084,9 @@ class MainWindow(QMainWindow):
                     aes_key=self.settings.default_aes_key or None,
                     archive_path=archive,
                     native_archive=self.pak_archives.get(archive),
+                    usmap=self.settings.usmap_path or None,
+                    scheme=getattr(self.current_driver, "scheme", None) or getattr(self.current_driver, "encryption_scheme", None) or None,
+                    egame=getattr(self.current_driver, "egame", None) or None,
                     meta={"Engine": "Unreal", "Source": Path(archive).name},
                 )
             )
@@ -1528,10 +1587,51 @@ class MainWindow(QMainWindow):
 
         UsmapDumpDialog(self, suggested_exe=self.current_executable).exec()
 
+    def _prompt_for_usmap(self, driver, path: str) -> str:
+        """Ask the user how to obtain the .usmap a driver requires.
+
+        Returns ``"generate"``, ``"pick"`` or ``"skip"``."""
+        title = Path(path).name
+        box = QMessageBox(self)
+        box.setWindowTitle("USMAP required")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            f"<b>{driver.label}</b> uses unversioned UE5 packages, which need a "
+            "CUE4Parse mappings file (<code>.usmap</code>). No mappings file was "
+            "found for <b>{0}</b>.".format(escape(title))
+        )
+        generate = box.addButton("Generate from running game", QMessageBox.ButtonRole.AcceptRole)
+        pick = box.addButton("Choose existing .usmap...", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is generate:
+            return "generate"
+        if clicked is pick:
+            return "pick"
+        return "skip"
+
+    def _pick_usmap_file(self) -> Optional[str]:
+        from PySide6.QtWidgets import QFileDialog
+
+        start = str(Path.home() / ".dualforge")
+        picked, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose a .usmap mappings file",
+            start,
+            "USMAP mappings (*.usmap)",
+        )
+        return picked or None
+
     def open_drivers(self) -> None:
         from dualforge.ui.drivers_dialog import DriversDialog
 
         DriversDialog(self).exec()
+
+    def open_compatibility(self) -> None:
+        from dualforge.ui.compat_dialog import CompatDialog
+
+        CompatDialog(self).exec()
 
     # ---- recent files ----
 

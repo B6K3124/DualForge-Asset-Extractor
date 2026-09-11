@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Tuple
 
 from dualforge.compression import CompressionError, decompress
 
@@ -540,15 +540,33 @@ class BethesdaArchive:
             return raw
         if len(raw) < 4:
             raise BethesdaError(f"truncated compressed data for {f.path}")
-        original_size = struct.unpack_from("<I", raw, 0)[0]
-        payload = raw[4:]
         method = "lz4" if self.version >= 105 else "zlib"
+        original_size, payload = self._bsa_payload(f.path, raw)
         try:
             return decompress(payload, method, output_size=original_size)
         except CompressionError as exc:
             raise BethesdaError(f"cannot decompress {f.path}: {exc}") from exc
-        except Exception as exc:
-            raise BethesdaError(f"cannot decompress {f.path}: {exc}") from exc
+
+    def _bsa_payload(self, path: str, raw: bytes) -> Tuple[int, bytes]:
+        """Split a compressed BSA block into (uncompressed size, payload).
+
+        Streaming-layout texture archives (v104/105 with ``FLAG_FILES_NAMED``)
+        prepend an embedded name label to every compressed block in the data
+        region: ``[u8 name length][name][u32 uncompressed size][payload]``.
+        Other archives store ``[u32 uncompressed size][payload]`` directly.
+        """
+        skip = 0
+        if (
+            self.version >= 104
+            and self.file_flags & FLAG_FILES_NAMED
+            and len(raw) > 1
+        ):
+            name_len = raw[0]
+            if 1 + name_len + 4 <= len(raw):
+                skip = 1 + name_len
+        if skip:
+            return struct.unpack_from("<I", raw, skip)[0], raw[skip + 4 :]
+        return struct.unpack_from("<I", raw, 0)[0], raw[4:]
 
     def _read_ba2_general(self, f: _BA2File) -> bytes:
         size = f.packed_size if f.compressed else f.unpacked_size

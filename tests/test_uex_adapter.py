@@ -234,6 +234,60 @@ def test_find_usmap_checks_env_then_home_then_paks(tmp_path: Path, monkeypatch):
     assert find_usmap(str(paks)) == str(paks_map)
 
 
+def test_find_usmap_scores_game_tokens_not_substring_noise(tmp_path: Path, monkeypatch):
+    """A TEKKEN 8 paks folder must pick TEKKEN8-Mappings over unrelated
+    mappings, even though short tokens like ``e``/``8`` appear in both names.
+
+    Regression: the old ``any(token in name)`` check returned whichever
+    mappings file was iterated first for almost every game."""
+    monkeypatch.delenv("DUALFORGE_USMAP", raising=False)
+    monkeypatch.setattr("dualforge.unreal.uex_adapter.Path.home", lambda: tmp_path / "home")
+    maps_dir = tmp_path / "home" / ".dualforge"
+    maps_dir.mkdir(parents=True)
+    tekken = maps_dir / "TEKKEN8-Mappings.usmap"
+    fortnite = maps_dir / "Fortnite-Mappings.usmap"
+    tekken.write_bytes(b"UM")
+    fortnite.write_bytes(b"UM")
+    paks = tmp_path / "TEKKEN 8" / "Polaris" / "Content" / "Paks"
+    paks.mkdir(parents=True)
+    # Fortnite is alphabetically first, so a bad matcher would return it.
+    assert find_usmap(str(paks)).endswith("TEKKEN8-Mappings.usmap")
+    assert find_usmap(str(paks / "..")).endswith("TEKKEN8-Mappings.usmap")
+
+
+def test_game_for_uses_driver_egame_override(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("DUALFORGE_EGAME", raising=False)
+    calls = []
+
+    def runner(args, timeout):
+        calls.append(list(args))
+        assert args[0] == "doctor"
+        return "mounted: 1 archives, 3 files\n", "", 0
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = runner
+    game = adapter._game_for(str(tmp_path), None, None, None, "GAME_TEKKEN7")
+    assert game == "GAME_TEKKEN7"
+    assert calls and calls[0][0] == "doctor"
+
+
+def test_game_for_driver_egame_falls_back_on_probe_failure(tmp_path: Path, monkeypatch):
+    """A driver egame that cannot mount (e.g. tekken8's GAME_UE5_2 on a Tekken 7
+    archive) must fall through to the next candidate instead of being forced."""
+    monkeypatch.delenv("DUALFORGE_EGAME", raising=False)
+    calls = []
+
+    def runner(args, timeout):
+        calls.append(list(args))
+        return ("", "", 1) if len(calls) == 1 else ("mounted: 1 archives, 3 files\n", "", 0)
+
+    adapter = UexAdapter("fake-uex")
+    adapter._run = runner
+    game = adapter._game_for(str(tmp_path), None, None, None, "GAME_UE5_2")
+    assert len(calls) == 2
+    assert game != "GAME_UE5_2"
+
+
 def test_list_files_truncation_raises(tmp_path: Path):
     import pytest
 

@@ -126,6 +126,27 @@ def test_too_small_payload_raises():
         _decode_blocks("bc1", b"\x00" * 4, 64, 64)
 
 
+def test_dxt5_dds_decodes_to_rgba_image():
+    # bc3/DXT5 goes through the int32 palette path; decode_dds must hand PIL a
+    # uint8 RGBA array (4x4 board -> one 16-byte block).
+    header = bytearray(128)
+    header[0:4] = b"DDS "
+    header[4:8] = (124).to_bytes(4, "little")
+    header[12:16] = (4).to_bytes(4, "little")  # height
+    header[16:20] = (4).to_bytes(4, "little")  # width
+    header[76:80] = (124).to_bytes(4, "little")  # pixel format size
+    header[80:84] = (0x4).to_bytes(4, "little")  # DDPF_FOURCC
+    header[84:88] = b"DXT5"
+    payload = bytes([0x00, 0xFF]) + b"\x00" * 6  # alpha endpoints, all idx 0
+    payload += struct.pack("<HH", 0xF800, 0x0000) + b"\x00" * 4
+    image = decode_dds(bytes(header) + payload)
+    arr = np.asarray(image.convert("RGBA"))
+    assert image.mode == "RGBA"
+    assert arr.shape == (4, 4, 4)
+    assert arr[..., 0].max() == 255  # red colour endpoint
+    assert arr[..., 3].min() == 0  # a0=0 with index 0 -> transparent
+
+
 def test_decode_dds_rejects_garbage():
     with pytest.raises(TextureDecodeError):
         decode_dds(b"not a dds" + b"\x00" * 200)

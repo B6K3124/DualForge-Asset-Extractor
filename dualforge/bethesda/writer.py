@@ -46,6 +46,7 @@ def build_bsa(
     files: Sequence[Tuple[str, str, bytes]],
     version: int = 104,
     compress: bool = False,
+    streamed: bool = False,
 ) -> bytes:
     """Build a BSA archive.
 
@@ -57,6 +58,11 @@ def build_bsa(
     Fallout 4 / Skyrim Special Edition (folder records pointing at content
     blocks, folder names as ``u8-length + bytes + NUL``, and a separate
     NUL-terminated file-name block); v103 keeps the classic linear layout.
+
+    ``streamed`` (v104/105 only) mirrors the Skyrim SE texture-archive layout:
+    ``file_flags`` gains ``FLAG_FILES_NAMED`` and each compressed block in the
+    data region is prefixed with an embedded name label,
+    ``[u8 name length][name][u32 uncompressed size][payload]``.
     """
     if version == 103:
         version_int = 0x67
@@ -87,7 +93,8 @@ def build_bsa(
 
     if version != 103:
         return _build_bsa_v104_105(
-            folders, flattened, version, version_int, archive_flags, compress
+            folders, flattened, version, version_int, archive_flags, compress,
+            streamed,
         )
 
     # ── v103 classic linear layout ───────────────────────────────────
@@ -160,7 +167,7 @@ def build_bsa(
 
 
 def _build_bsa_v104_105(
-    folders, flattened, version, version_int, archive_flags, compress,
+    folders, flattened, version, version_int, archive_flags, compress, streamed,
 ) -> bytes:
     """Write the real Fallout 4 / Skyrim SE (v104 / v105) byte layout."""
     dir_size = 24 if version >= 105 else 16
@@ -185,8 +192,11 @@ def _build_bsa_v104_105(
     # File data blobs (offsets relative to data_offset).
     data = bytearray()
     blob_sizes = []
-    for _dir, _rel, content in flattened:
+    for _dir, rel, content in flattened:
         blob, = _encode_blob(content, version, compress)
+        if streamed and compress:
+            base = rel.split("/")[-1].encode("utf-8")
+            blob = struct.pack("<B", len(base)) + base + blob
         blob_sizes.append(len(blob))
         data += blob
 
@@ -230,7 +240,7 @@ def _build_bsa_v104_105(
         "<I", sum(len(folder.encode("utf-8")) for folder, _ in folders)
     )
     header += struct.pack("<I", len(file_name_blob))
-    header += struct.pack("<HH", 0, 0)  # file_flags + padding
+    header += struct.pack("<HH", FLAG_FILES_NAMED if streamed else 0, 0)  # file_flags + padding
 
     return (
         bytes(header)

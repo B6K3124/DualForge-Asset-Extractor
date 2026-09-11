@@ -13,6 +13,11 @@ encrypted archives, compressed bundles, and a built-in hex inspector for everyth
 
 ![DualForge asset browser](docs/screenshots/hero.png)
 
+Live 3D mesh previews (texture-mapped GLB, both engines):
+
+![TEKKEN 8 fighter — Unreal skeletal mesh preview](docs/screenshots/tekken-model.png)
+![Skyrim head — Bethesda NIF mesh preview](docs/screenshots/head-model.png)
+
 
 ---
 

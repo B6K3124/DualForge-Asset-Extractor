@@ -278,7 +278,8 @@ def _decode_blocks(fmt: str, data: bytes, width: int, height: int) -> np.ndarray
     out = _decode_bc(blocks.reshape(-1, block_bytes), fmt)  # (N, 4, 4, 4)
     out = out.reshape(bh, bw, 4, 4, 4)
     image = out.transpose(0, 2, 1, 3, 4).reshape(bh * 4, bw * 4, 4)
-    return np.ascontiguousarray(image[:height, :width])
+    # bc1/bc2/bc3 palettes arrive as int32; PIL only accepts uint8 here.
+    return np.ascontiguousarray(image[:height, :width], dtype=np.uint8)
 
 
 # ---------------------------------------------------------------------------

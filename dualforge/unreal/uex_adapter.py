@@ -90,6 +90,11 @@ _EXPORTED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Successful EGame probes are shared across adapter instances (each bridge call
+# spins up a fresh UexAdapter), so cursor moves do not re-run the slow doctor
+# probe on every preview. Keyed by (paks_dir, aes, usmap, scheme).
+_EGAME_CACHE: Dict[Tuple[str, str, str, str], str] = {}
+
 
 def normalize_aes_key(key: Optional[str]) -> Optional[str]:
     """uex profiles expect 0x-prefixed hex; DualForge stores bare hex."""
@@ -101,11 +106,45 @@ def normalize_aes_key(key: Optional[str]) -> Optional[str]:
     return "0x" + key
 
 
+def _usmap_stop_tokens() -> frozenset:
+    return frozenset(
+        {
+            "mapping", "mappings", "usmap", "game", "games", "common", "steam",
+            "steamapps", "steamlibrary", "content", "paks", "pak", "data", "bin",
+            "windows", "win64", "ue", "ue4", "ue5", "ue6", "export", "exports",
+            "packages", "package",
+        }
+    )
+
+
+def _paks_tokens(paks_dir: str):
+    """Meaningful lowercase path tokens used to match a usmap to a game.
+
+    Short tokens (single/double characters such as ``e``, ``8``, ``pr``) and
+    generic words appear in almost every mappings filename and used to make
+    ``any(token in name)`` pick the wrong usmap for a game.
+    """
+    stop = _usmap_stop_tokens()
+    return frozenset(
+        token for token in re.findall(r"[a-z0-9]+", str(paks_dir).lower())
+        if len(token) >= 3 and token not in stop
+    )
+
+
+def _usmap_match_score(stem: str, tokens: frozenset) -> int:
+    """How many distinctive game tokens appear in a usmap's file stem."""
+    fold = re.sub(r"[^a-z0-9]", " ", stem.lower())
+    return sum(1 for token in tokens if token in fold)
+
+
 def find_usmap(paks_dir: str) -> Optional[str]:
     """Locate a CUE4Parse mappings file for unversioned (UE5.3+) packages.
 
-    Order: DUALFORGE_USMAP env var, ~/.dualforge/*.usmap, the archive's own
-    folder, then the working directory.
+    Order: DUALFORGE_USMAP env var, a ``~/.dualforge/*.usmap`` whose name best
+    matches the archive folder's game tokens (scored per-token, so
+    ``TEKKEN8-Mappings.usmap`` wins for a TEKKEN 8 folder over unrelated
+    mappings), then any other user mappings, then the archive's own folder,
+    then the working directory.
     """
     from pathlib import Path
 
@@ -113,10 +152,27 @@ def find_usmap(paks_dir: str) -> Optional[str]:
     env = os.environ.get("DUALFORGE_USMAP")
     if env:
         candidates.append(Path(env))
-    candidates.extend(Path.home().glob(".dualforge/*.usmap"))
+    user_maps = sorted(Path.home().glob(".dualforge/*.usmap"))
+    tokens = _paks_tokens(paks_dir)
+    scored: List[tuple] = []
+    others: List[Path] = []
+    for candidate in user_maps:
+        score = _usmap_match_score(candidate.stem, tokens)
+        if score > 0:
+            scored.append((score, candidate))
+        else:
+            others.append(candidate)
+    scored.sort(key=lambda item: item[0], reverse=True)
+    candidates.extend(candidate for _score, candidate in scored)
+    candidates.extend(others)
     candidates.extend(Path(paks_dir).glob("*.usmap"))
     candidates.extend(Path.cwd().glob("*.usmap"))
+    seen = set()
     for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         if candidate.is_file():
             return str(candidate)
     return None
@@ -197,9 +253,12 @@ class UexAdapter:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> List[Dict[str, object]]:
         paks_dir = str(Path(pak).parent)
-        game = self._game_for(paks_dir, aes_key, usmap, scheme)
+        if usmap is None:
+            usmap = find_usmap(paks_dir)
+        game = self._game_for(paks_dir, aes_key, usmap, scheme, egame)
         config = _write_config(
             paks_dir, aes_key, str(Path(pak).parent), [],
             game, usmap, dynamic_keys=dynamic_keys,
@@ -239,10 +298,11 @@ class UexAdapter:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> int:
         paks_dir = str(Path(pak).parent)
-        game = self._game_for(paks_dir, aes_key, usmap, scheme)
-        roots = _normalize_vpaths(files or self._default_roots(pak, aes_key, usmap))
+        game = self._game_for(paks_dir, aes_key, usmap, scheme, egame)
+        roots = _normalize_vpaths(files or self._default_roots(pak, aes_key, usmap, egame=egame))
         config = _write_config(
             paks_dir, aes_key, out_dir, roots, game, usmap,
             dynamic_keys=dynamic_keys,
@@ -269,6 +329,7 @@ class UexAdapter:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> Optional[Tuple[bytes, str]]:
         """Export one package's mesh as GLB via uex ``preview-mesh``.
 
@@ -279,7 +340,7 @@ class UexAdapter:
         paks_dir = str(Path(pak).parent)
         if usmap is None:
             usmap = find_usmap(paks_dir)
-        game = self._game_for(paks_dir, aes_key, usmap, scheme)
+        game = self._game_for(paks_dir, aes_key, usmap, scheme, egame)
         config = _write_config(
             paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,
             dynamic_keys=dynamic_keys,
@@ -326,6 +387,7 @@ class UexAdapter:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> Optional[str]:
         """Export one Unreal package's mesh as a GLB directly to disk.
 
@@ -337,7 +399,7 @@ class UexAdapter:
         paks_dir = str(Path(pak).parent)
         if usmap is None:
             usmap = find_usmap(paks_dir)
-        game = self._game_for(paks_dir, aes_key, usmap, scheme)
+        game = self._game_for(paks_dir, aes_key, usmap, scheme, egame)
         config = _write_config(
             paks_dir, aes_key, str(paks_dir), [vpath], game, usmap,
             dynamic_keys=dynamic_keys,
@@ -370,10 +432,16 @@ class UexAdapter:
 
     # -------------------------------------------------------------- internals
 
-    def _default_roots(self, pak: str, aes_key: Optional[str], usmap: Optional[str]) -> List[str]:
+    def _default_roots(
+        self,
+        pak: str,
+        aes_key: Optional[str],
+        usmap: Optional[str],
+        egame: Optional[str] = None,
+    ) -> List[str]:
         """Top-level virtual folders of the game, used for whole-archive exports."""
         try:
-            entries = self.list_files(pak, aes_key, usmap)
+            entries = self.list_files(pak, aes_key, usmap, egame=egame)
         except UnrealError:
             return []
         roots = {path.split("/", 1)[0] for path in (e["path"] for e in entries)}
@@ -385,10 +453,22 @@ class UexAdapter:
         aes_key: Optional[str],
         usmap: Optional[str] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> str:
         cached = self._games.get(paks_dir)
         if cached:
             return cached
+        cache_key = (
+            paks_dir,
+            str(aes_key or ""),
+            str(usmap or ""),
+            str(scheme or ""),
+            str(egame or ""),
+        )
+        shared = _EGAME_CACHE.get(cache_key)
+        if shared:
+            self._games[paks_dir] = shared
+            return shared
         # An explicit DUALFORGE_EGAME value beats every heuristic (use it to
         # force an exact engine for games this build of CUE4Parse cannot guess,
         # e.g. a future/unknown UE release).
@@ -396,10 +476,12 @@ class UexAdapter:
         if override and override.strip():
             override = override.strip()
             self._games[paks_dir] = override
+            _EGAME_CACHE[cache_key] = override
             return override
         # A known scheme maps to a definitive GameType; prefer it over probing.
         if scheme and scheme in SCHEME_GAMES:
             self._games[paks_dir] = SCHEME_GAMES[scheme]
+            _EGAME_CACHE[cache_key] = SCHEME_GAMES[scheme]
             return SCHEME_GAMES[scheme]
         from dualforge.unreal.pak import pak_footer_version
 
@@ -409,20 +491,38 @@ class UexAdapter:
         except Exception:
             pass
         candidates = egame_candidates(paks_dir, footer)
+        # A matched driver's EGame is tried first (verified by doctor like any
+        # other candidate) rather than overriding probing outright: a driver
+        # whose fragment also covers a sibling title (e.g. tekken8 matching a
+        # Tekken 7 folder) must not force the wrong GameType on that title.
+        if egame and egame.strip():
+            egame = egame.strip()
+            if egame not in candidates:
+                candidates.insert(0, egame)
+        # A stale/wrong .usmap can prevent mounting; probe with it first, and
+        # when no candidate mounts, retry the same candidates without it so a
+        # mismatched mappings file never blocks access to the archive.
+        plans = [(usmap, candidates)]
+        if usmap:
+            plans.append((None, candidates))
         last_error = ""
-        for game in candidates:
-            config = _write_config(paks_dir, aes_key, str(Path(paks_dir)), [], game, usmap)
-            try:
-                output, stderr, code = self._run(
-                    ["doctor", "--profile", "dualforge", "--config", str(config)],
-                    timeout=DOCTOR_TIMEOUT,
+        for usmap_try, game_plan in plans:
+            for game in game_plan:
+                config = _write_config(
+                    paks_dir, aes_key, str(Path(paks_dir)), [], game, usmap_try
                 )
-            finally:
-                _remove(config)
-            if code == 0 or _mounted_file_count(output) > 0:
-                self._games[paks_dir] = game
-                return game
-            last_error = f"{game}: {stderr.strip() or output.strip()}"
+                try:
+                    output, stderr, code = self._run(
+                        ["doctor", "--profile", "dualforge", "--config", str(config)],
+                        timeout=DOCTOR_TIMEOUT,
+                    )
+                finally:
+                    _remove(config)
+                if code == 0 or _mounted_file_count(output) > 0:
+                    self._games[paks_dir] = game
+                    _EGAME_CACHE[cache_key] = game
+                    return game
+                last_error = f"{game}: {stderr.strip() or output.strip()}"
         raise UnrealError(
             "no working UE version found for this archive. Tried: "
             f"{', '.join(candidates)}. Last attempt: {last_error}"

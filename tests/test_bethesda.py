@@ -52,6 +52,22 @@ def test_bsa_size_of(tmp_path):
         archive.size_of("missing/file.bin")
 
 
+def test_bsa_v105_streamed_textures(tmp_path):
+    tex = [
+        ("textures/actors/dog/dog.dds", "textures/actors/dog", b"DDSTEXT" * 40),
+        ("textures/actors/dog/dog_n.dds", "textures/actors/dog", b"NORM" * 50),
+    ]
+    path = _write(
+        tmp_path, "textures0.bsa",
+        build_bsa(files=tex, version=105, compress=True, streamed=True),
+    )
+    archive = BethesdaArchive(path)
+    assert archive.file_flags & 0x002
+    assert list(archive.list_files()) == [rel for rel, _f, _d in tex]
+    for rel, _folder, data in tex:
+        assert archive.open_file(rel) == data
+
+
 def test_bsa_extract_all(tmp_path):
     path = _write(tmp_path, "game.bsa", build_bsa(files=FILES, version=105, compress=True))
     archive = BethesdaArchive(path)

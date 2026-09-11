@@ -490,3 +490,23 @@ def test_registry_match_prefers_generic_on_ambiguous_tie():
     assert tekken.name in (d.name for d in reg._drivers.values() if d.archive_patterns)
     assert tekken.name != "generic-unreal"
 
+
+def test_registry_match_tie_prefers_specific_subtitle():
+    """A Fallout: New Vegas archive inside a 'Fallout New Vegas' folder ties
+    between the umbrella 'fallout' driver and 'fallout-new-vegas'; the longer,
+    game-specific fragment must win instead of whichever iterates first."""
+    from dualforge.drivers.registry import DriverRegistry
+
+    reg = DriverRegistry()
+    reg._ensure_loaded()
+    result = reg.match(
+        "D:/SteamLibrary/steamapps/common/Fallout New Vegas/Data/FalloutNV - Meshes.bsa"
+    )
+    assert result is not None
+    assert result.name == "fallout-new-vegas"
+
+    # A bare Fallout 3 archive still matches the umbrella driver.
+    fo3 = reg.match("D:/SteamLibrary/steamapps/common/Fallout 3/Data/Fallout - Meshes.bsa")
+    assert fo3 is not None
+    assert fo3.name == "fallout"
+

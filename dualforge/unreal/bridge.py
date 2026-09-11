@@ -29,11 +29,12 @@ class UnrealBridge:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> List[Dict[str, object]]:
         self._require()
         uex = self._uex_adapter()
         if uex is not None:
-            return uex.list_files(pak, aes_key, usmap, dynamic_keys=dynamic_keys, scheme=scheme)
+            return uex.list_files(pak, aes_key, usmap, dynamic_keys=dynamic_keys, scheme=scheme, egame=egame)
         args = ["list", "--json", pak]
         if aes_key:
             args += ["--aes", aes_key]
@@ -49,13 +50,14 @@ class UnrealBridge:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ) -> int:
         self._require()
         uex = self._uex_adapter()
         if uex is not None:
             return uex.extract(
                 pak, out_dir, aes_key, files, usmap,
-                dynamic_keys=dynamic_keys, scheme=scheme,
+                dynamic_keys=dynamic_keys, scheme=scheme, egame=egame,
             )
         args = ["extract", pak, "-o", out_dir]
         if aes_key:
@@ -73,6 +75,7 @@ class UnrealBridge:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ):
         """Preview one Unreal package as a mesh, returning ``(glb_bytes, kind)``
         or ``None`` when the package holds no readable mesh.
@@ -90,7 +93,7 @@ class UnrealBridge:
             )
         return uex.preview_mesh(
             pak, vpath, aes_key, usmap,
-            dynamic_keys=dynamic_keys, scheme=scheme,
+            dynamic_keys=dynamic_keys, scheme=scheme, egame=egame,
         )
 
     def export_mesh(
@@ -102,6 +105,7 @@ class UnrealBridge:
         usmap: Optional[str] = None,
         dynamic_keys: Optional[Dict[str, str]] = None,
         scheme: Optional[str] = None,
+        egame: Optional[str] = None,
     ):
         """Export one Unreal package's mesh as a textured GLB to ``out_path``,
         returning the mesh kind (``staticmesh`` / ``skeletalmesh``) or ``None``
@@ -120,7 +124,7 @@ class UnrealBridge:
             )
         return uex.export_mesh(
             pak, vpath, out_path, aes_key, usmap,
-            dynamic_keys=dynamic_keys, scheme=scheme,
+            dynamic_keys=dynamic_keys, scheme=scheme, egame=egame,
         )
 
     def _require(self) -> None:

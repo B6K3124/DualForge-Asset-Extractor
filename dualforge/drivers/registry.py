@@ -98,6 +98,8 @@ class DriverRegistry:
         best: Optional[GameDriver] = None
         best_score = 0.0
         best_is_generic = False
+        best_hits = (0, 0)
+        text = archive_path.lower()
         for driver in self._drivers.values():
             if engine and driver.engine not in (engine, "auto"):
                 continue
@@ -115,14 +117,27 @@ class DriverRegistry:
                 and not driver.archive_patterns
                 and driver.engine not in ("auto", "")
             )
+            # For specific drivers that tie (e.g. "new vegas" vs "fallout" on a
+            # Fallout: New Vegas archive), prefer the one whose fragments hit
+            # the path more and with the longest distinguishing match, so a
+            # sub-title driver beats its umbrella driver.
+            matched = [fragment for fragment in driver.game_fragments if fragment.lower() in text]
+            hits = (len(matched), max((len(fragment) for fragment in matched), default=0))
             if (
                 best is None
                 or score > best_score
+                or (
+                    score == best_score
+                    and not is_generic
+                    and not best_is_generic
+                    and hits > best_hits
+                )
                 or (score == best_score and is_generic and not best_is_generic)
             ):
                 best_score = score
                 best = driver
                 best_is_generic = is_generic
+                best_hits = hits
         return best if best_score > 0 else None
 
     # ── file I/O ──────────────────────────────────────────────────────
