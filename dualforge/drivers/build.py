@@ -12,17 +12,19 @@ The result is a usable ``GameDriver`` the user can review, tweak, and save.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from dualforge.detector import detect
 from dualforge.drivers.driver import GameDriver
 from dualforge.export.convert import DEFAULT_FORMATS
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_driver_from_archive(
     archive_path: str,
-    name: Optional[str] = None,
-    label: Optional[str] = None,
+    name: str | None = None,
+    label: str | None = None,
 ) -> GameDriver:
     """Infer a game driver from an archive file (best-effort).
 
@@ -37,10 +39,7 @@ def build_driver_from_archive(
         engine = detection.engine
 
     game_name = name or _slug(path.parent.name) or path.stem
-    if engine in ("unity", "unreal"):
-        game_label = label or path.parent.name or path.stem
-    else:
-        game_label = label or "Generic Game"
+    game_label = label or path.parent.name or path.stem if engine in ("unity", "unreal") else label or "Generic Game"
 
     driver = GameDriver(
         name=game_name,
@@ -89,6 +88,7 @@ def _suggest_scheme(path: Path, engine: str) -> str:
         if preset is not None:
             return preset.name
     except Exception:
+        logger.debug("scheme suggestion failed for %s", path, exc_info=True)
         pass
     if engine == "unity":
         return "aes-256"
@@ -111,6 +111,7 @@ def _suggest_egame(detection) -> str:
             if candidates:
                 return candidates[0]
     except Exception:
+        logger.debug("egame suggestion failed", exc_info=True)
         pass
     return ""
 

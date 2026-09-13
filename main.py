@@ -31,6 +31,10 @@ def _run_gui(open_path: str | None = None) -> int:
     if os.environ.get("QT_QPA_PLATFORM", "") == "" and os.name == "nt":
         os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 
+    from dualforge.log import setup_logging
+
+    setup_logging()
+
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QSplashScreen
 

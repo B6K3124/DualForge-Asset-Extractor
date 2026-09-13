@@ -5,7 +5,8 @@ import json
 import struct
 import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -44,8 +45,7 @@ class MeshGeometry:
         self.texture_name = texture_name
 
     def __iter__(self):
-        for item in (self.verts, self.normals, self.tris, self.edges):
-            yield item
+        yield from (self.verts, self.normals, self.tris, self.edges)
 
     def __len__(self) -> int:
         return 4
@@ -95,10 +95,10 @@ def parse_glb(data: bytes):
     meshes = doc.get("meshes")
     if not meshes:
         return None
-    positions: Optional[Sequence[Sequence[float]]] = None
-    normals: Optional[Sequence[Sequence[float]]] = None
-    indices: Optional[Sequence[int]] = None
-    uv_list: Optional[Sequence[Sequence[float]]] = None
+    positions: Sequence[Sequence[float]] | None = None
+    normals: Sequence[Sequence[float]] | None = None
+    indices: Sequence[int] | None = None
+    uv_list: Sequence[Sequence[float]] | None = None
     has_normals_field = False
     for mesh in meshes:
         for primitive in mesh.get("primitives", []):
@@ -171,15 +171,15 @@ def parse_glb(data: bytes):
     return MeshGeometry(verts, n, t, e, uv=uv, texture=texture, texture_name=texture_name)
 
 
-def _read_glb(data: bytes) -> Tuple[Dict[str, Any], List[bytes]]:
+def _read_glb(data: bytes) -> tuple[dict[str, Any], list[bytes]]:
     if len(data) < 20:
         raise GltfReaderError("GLB file is too small")
     magic, _version, _length = struct.unpack_from("<III", data, 0)
     if magic != 0x46546C67:
         raise GltfReaderError("invalid GLB magic")
     offset = 12
-    json_bytes: Optional[bytes] = None
-    buff_bytes: List[bytes] = []
+    json_bytes: bytes | None = None
+    buff_bytes: list[bytes] = []
     while offset < len(data):
         if offset + 8 > len(data):
             break
@@ -200,8 +200,8 @@ def _read_glb(data: bytes) -> Tuple[Dict[str, Any], List[bytes]]:
     return doc, buff_bytes
 
 
-def _load_external_buffers(doc: Dict[str, Any]) -> List[bytes]:
-    buffers: List[bytes] = []
+def _load_external_buffers(doc: dict[str, Any]) -> list[bytes]:
+    buffers: list[bytes] = []
     for buffer_spec in doc.get("buffers", []) or []:
         uri = buffer_spec.get("uri", "")
         if uri.startswith("data:"):
@@ -228,8 +228,8 @@ def _decode_data_uri(uri: str) -> bytes:
 
 
 def _resolve_material_texture(
-    doc: Dict[str, Any], buffers: List[bytes], primitive: Dict[str, Any]
-) -> Optional[Tuple[bytes, str]]:
+    doc: dict[str, Any], buffers: list[bytes], primitive: dict[str, Any]
+) -> tuple[bytes, str] | None:
     """Best-effort base-color texture for a glTF primitive.
 
     Follows ``primitive.material -> pbrMetallicRoughness.baseColorTexture``
@@ -291,11 +291,11 @@ def _resolve_material_texture(
 
 
 def _read_accessor(
-    doc: Dict[str, Any],
-    buffers: List[bytes],
+    doc: dict[str, Any],
+    buffers: list[bytes],
     accessor_index: int,
     allow_unsigned: bool = False,
-) -> Optional[List[Any]]:
+) -> list[Any] | None:
     accessors = doc.get("accessors", []) or []
     if not (0 <= accessor_index < len(accessors)):
         return None
@@ -327,7 +327,7 @@ def _read_accessor(
     if needed > len(buffer):
         return None
 
-    values: List[Any] = []
+    values: list[Any] = []
     for i in range(int(accessor.get("count", 0))):
         offset = byte_offset + i * stride
         elements = struct.unpack_from(

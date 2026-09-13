@@ -25,6 +25,56 @@ def test_find_validation_pak_accepts_file_directly(tmp_path):
     assert find_validation_pak(str(pak)) == str(pak)
 
 
+def test_find_validation_pak_raises_without_pak(tmp_path):
+    from pytest import raises
+
+    with raises(RuntimeError):
+        find_validation_pak(str(tmp_path))
+
+
+def test_find_validation_pak_prefers_largest_in_tree(tmp_path):
+    root = tmp_path / "Game"
+    nested = root / "Content" / "Paks"
+    nested.mkdir(parents=True)
+    for name, size in (("patch.pak", 100), ("main.pak", 900), ("tiny.pak", 20)):
+        (nested / name).write_bytes(b"\x00" * size)
+    assert find_validation_pak(str(root)) == str(nested / "main.pak")
+
+
+def test_cleanup_hunt_json_ignores_foreign_dirs(tmp_path):
+    from dualforge.crack import _cleanup_hunt_json
+
+    foreign = tmp_path / "other"
+    foreign.mkdir()
+    marker = foreign / "keep.json"
+    marker.write_text("{}", encoding="utf-8")
+    _cleanup_hunt_json(str(marker))
+    assert marker.exists()
+
+
+def test_run_ghidra_hunt_invokes_script(monkeypatch):
+    import dualforge.crack as crack_module
+
+    calls = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "out"
+        stderr = ""
+
+    def fake_run(cmd, capture_output=None, text=None, timeout=None, creationflags=None):
+        calls["cmd"] = cmd
+        return FakeCompleted()
+
+    monkeypatch.setattr(crack_module.subprocess, "run", fake_run)
+    rc, output, json_path = crack_module.run_ghidra_hunt("game.exe", "C:/ghidra", 5)
+    assert rc == 0
+    assert json_path
+    assert "game.exe" in (" ".join(calls["cmd"]))
+    assert "--no-add-keystore" in calls["cmd"]
+    crack_module._cleanup_hunt_json(json_path)
+
+
 def test_extract_candidate_keys_filters_64_hex(tmp_path):
     out = tmp_path / "candidates.json"
     out.write_text(

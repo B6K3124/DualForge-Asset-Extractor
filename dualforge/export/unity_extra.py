@@ -15,7 +15,12 @@ clear UnityError instead of aborting an extraction run.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any
+from collections.abc import Iterator
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 try:
     from UnityPy.enums import TextureFormat as _TF
@@ -48,7 +53,7 @@ def _ceil(value: int, block: int) -> int:
     return (value + block - 1) // block
 
 
-def _face_byte_size(width: int, height: int, texture_format: Any) -> Optional[int]:
+def _face_byte_size(width: int, height: int, texture_format: Any) -> int | None:
     """Return the byte length of one Cubemap face's mip 0 surface, or None."""
     fmt_name = getattr(texture_format, "name", None) or str(texture_format)
     if fmt_name.startswith("PVR"):
@@ -65,7 +70,7 @@ def _face_byte_size(width: int, height: int, texture_format: Any) -> Optional[in
     return None
 
 
-def cubemap_faces(cubemap: Any) -> List[Any]:
+def cubemap_faces(cubemap: Any) -> list[Any]:
     """Decode every face of a Unity ``Cubemap`` to a PIL image.
 
     Faces are returned in the order Unity stores them (north, south, east,
@@ -76,9 +81,9 @@ def cubemap_faces(cubemap: Any) -> List[Any]:
     try:
         from UnityPy.export.Texture2DConverter import parse_image_data
     except ImportError:
-        raise ImportError("UnityPy is required for Cubemap export")
+        raise ImportError("UnityPy is required for Cubemap export") from None
 
-    data = bytes(getattr(cubemap, "get_image_data")() or b"")
+    data = bytes(cubemap.get_image_data() or b"")
     width = int(getattr(cubemap, "m_Width", 0) or 0)
     height = int(getattr(cubemap, "m_Height", 0) or 0)
     fmt = getattr(cubemap, "m_TextureFormat", None)
@@ -100,7 +105,7 @@ def cubemap_faces(cubemap: Any) -> List[Any]:
     if face_size is None or face_size <= 0 or face_size * max(count or 1, 1) < len(data) * 0.5:
         # Unknown layout (PVRTC etc.) -> decode the leading bytes as one image.
         return [decode(data)]
-    faces: List[Any] = []
+    faces: list[Any] = []
     for index in range(max(count, 1)):
         start = index * face_size
         if start + face_size > len(data):
@@ -108,14 +113,15 @@ def cubemap_faces(cubemap: Any) -> List[Any]:
         try:
             faces.append(decode(data[start:start + face_size]))
         except Exception:
+            logger.debug("cubemap face %d could not be decoded", index, exc_info=True)
             continue
     return faces or [decode(data[:face_size])]
 
 
-def _resource_path_bits(path: str) -> List[str]:
+def _resource_path_bits(path: str) -> list[str]:
     """Normalise a Unity resource reference into candidate file names."""
     base = Path(str(path or "")).name
-    bits: List[str] = []
+    bits: list[str] = []
     if base:
         bits.append(base)
         if ":" in base:
@@ -127,7 +133,7 @@ def video_clip_data(
     clip: Any,
     archive_path: str,
     environment: Any = None,
-) -> Tuple[bytes, str]:
+) -> tuple[bytes, str]:
     """Resolve a ``VideoClip``'s raw video bytes + a suggested extension.
 
     Unity stores video as a ``StreamedResource`` (path + offset + size)
@@ -154,6 +160,7 @@ def video_clip_data(
             try:
                 raw = source.get_raw_data()
             except Exception:
+                logger.debug("could not read raw bytes from stream resource", exc_info=True)
                 raw = None
         return bytes(raw or b"")
 
@@ -209,24 +216,25 @@ def _iter_readers(scope: Any) -> Iterator[Any]:
     return
 
 
-def resolve_pptr(ptr: Any, assets_file: Any) -> Optional[Any]:
+def resolve_pptr(ptr: Any, assets_file: Any) -> Any | None:
     """Return the readable object a PPtr points at (same assets file)."""
     if ptr is None or getattr(ptr, "path_id", None) is None:
         return None
     try:
         reader = assets_file.objects.get(ptr.path_id)
     except Exception:
+        logger.debug("could not resolve PPtr path_id %s", ptr.path_id, exc_info=True)
         return None
     if reader is None:
         return None
     return reader
 
 
-def sprite_atlas_entries(atlas: Any, assets_file: Any) -> List[Tuple[str, Any]]:
+def sprite_atlas_entries(atlas: Any, assets_file: Any) -> list[tuple[str, Any]]:
     """Resolve a ``SpriteAtlas`` to ``(name, PIL image)`` pairs."""
     packed = getattr(atlas, "m_PackedSprites", None) or []
     names = list(getattr(atlas, "m_PackedSpriteNamesToIndex", None) or [])
-    entries: List[Tuple[str, Any]] = []
+    entries: list[tuple[str, Any]] = []
     for index, ptr in enumerate(packed):
         reader = resolve_pptr(ptr, assets_file)
         if reader is None:
@@ -234,6 +242,7 @@ def sprite_atlas_entries(atlas: Any, assets_file: Any) -> List[Tuple[str, Any]]:
         try:
             sprite = reader.read()
         except Exception:
+            logger.debug("sprite %s could not be decoded", getattr(ptr, "path_id", "?"), exc_info=True)
             continue
         image = getattr(sprite, "image", None)
         if image is None:
@@ -242,14 +251,12 @@ def sprite_atlas_entries(atlas: Any, assets_file: Any) -> List[Tuple[str, Any]]:
 
                 image = SpriteHelper.get_image(sprite)
             except Exception:
+                logger.debug("sprite helper could not decode %s", getattr(sprite, "m_Name", "?"), exc_info=True)
                 image = None
         if image is None:
             continue
         name = ""
-        if index < len(names) and names[index]:
-            name = str(names[index])
-        else:
-            name = str(getattr(sprite, "m_Name", "") or "")
+        name = str(names[index]) if index < len(names) and names[index] else str(getattr(sprite, "m_Name", "") or "")
         entries.append((name or f"Sprite_{index:04d}", image))
     return entries
 
@@ -261,12 +268,13 @@ def sprite_name(ptr: Any, assets_file: Any) -> str:
     try:
         return str(getattr(reader.read(), "m_Name", "") or "")
     except Exception:
+        logger.debug("sprite name lookup failed for path_id %s", getattr(ptr, "path_id", "?"), exc_info=True)
         return ""
 
 
-def animator_summary(controller: Any, assets_file: Any) -> Dict[str, Any]:
+def animator_summary(controller: Any, assets_file: Any) -> dict[str, Any]:
     """Dump an ``AnimatorController`` (clips, params, bone map) as JSON-able data."""
-    clips: List[Dict[str, str]] = []
+    clips: list[dict[str, str]] = []
     for ptr in getattr(controller, "m_AnimationClips", None) or []:
         name = sprite_name(ptr, assets_file)
         clips.append({
@@ -276,7 +284,7 @@ def animator_summary(controller: Any, assets_file: Any) -> Dict[str, Any]:
         })
 
     tos = getattr(controller, "m_TOS", None) or []
-    state_names: List[str] = []
+    state_names: list[str] = []
     try:
         machine = getattr(getattr(controller, "m_Controller", None), "m_StateMachine", None)
         states = getattr(machine, "m_States", None) or []
@@ -287,9 +295,10 @@ def animator_summary(controller: Any, assets_file: Any) -> Dict[str, Any]:
                 if name:
                     state_names.append(str(name))
     except Exception:
+        logger.debug("animator controller state machine could not be walked", exc_info=True)
         pass
 
-    params: List[str] = []
+    params: list[str] = []
     try:
         controller_const = getattr(controller, "m_Controller", None)
         for param in getattr(controller_const, "m_AnimatorParameters", None) or []:
@@ -297,6 +306,7 @@ def animator_summary(controller: Any, assets_file: Any) -> Dict[str, Any]:
             param_type = getattr(param, "m_Type", None)
             params.append(str(name) + (f":{param_type}" if param_type is not None else ""))
     except Exception:
+        logger.debug("animator controller parameters could not be walked", exc_info=True)
         pass
 
     return {
@@ -308,17 +318,17 @@ def animator_summary(controller: Any, assets_file: Any) -> Dict[str, Any]:
     }
 
 
-def avatar_summary(avatar: Any) -> Dict[str, Any]:
+def avatar_summary(avatar: Any) -> dict[str, Any]:
     """Dump an ``Avatar`` (human config + skeleton names) as JSON-able data."""
     description = getattr(avatar, "m_HumanDescription", None) or getattr(avatar, "m_AvatarDescription", None)
-    human_bones: List[str] = []
+    human_bones: list[str] = []
     if description is not None:
         for bone in getattr(description, "m_Human", None) or []:
             name = getattr(bone, "m_BoneName", "") or ""
             limit = getattr(bone, "m_HumanName", "") or ""
             if name:
                 human_bones.append(str(name) + (f" ({limit})" if limit else ""))
-    skeleton: List[str] = []
+    skeleton: list[str] = []
     for bone in getattr(getattr(avatar, "m_AvatarSkeleton", None), "m_Node", None) or []:
         name = getattr(bone, "m_Name", "") or ""
         if name:
@@ -332,9 +342,9 @@ def avatar_summary(avatar: Any) -> Dict[str, Any]:
     }
 
 
-def lightmap_summary(lightmap: Any, assets_file: Any) -> Dict[str, Any]:
+def lightmap_summary(lightmap: Any, assets_file: Any) -> dict[str, Any]:
     """Dump a ``LightmapData`` (referenced light/dir/shadow-mask textures)."""
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "name": str(getattr(lightmap, "m_Name", "") or ""),
     }
     for key, attr in (
@@ -356,7 +366,7 @@ def lightmap_summary(lightmap: Any, assets_file: Any) -> Dict[str, Any]:
     return out
 
 
-def referenced_texture_images(obj: Any, assets_file: Any) -> Iterator[Tuple[str, Any]]:
+def referenced_texture_images(obj: Any, assets_file: Any) -> Iterator[tuple[str, Any]]:
     """Yield ``(name, PIL image)`` for every direct texture PPtr on ``obj``."""
     seen = set()
     for attr in dir(obj):
@@ -365,6 +375,7 @@ def referenced_texture_images(obj: Any, assets_file: Any) -> Iterator[Tuple[str,
         try:
             value = getattr(obj, attr)
         except Exception:
+            logger.debug("could not read attribute %r", attr, exc_info=True)
             continue
         if value is None or not hasattr(value, "path_id"):
             continue
@@ -377,6 +388,7 @@ def referenced_texture_images(obj: Any, assets_file: Any) -> Iterator[Tuple[str,
         try:
             target = reader.read()
         except Exception:
+            logger.debug("referenced texture path_id %s could not be decoded", path_id, exc_info=True)
             continue
         if getattr(target, "type", None) is not None and target.type.name not in {"Texture2D", "Cubemap"}:
             continue

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtGui import QImage
 
 from dualforge.export.gltf_reader import MeshGeometry
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 MAX_PREVIEW_BYTES = 256 * 1024
 MAX_WAV_BYTES = 512 * 1024 * 1024
@@ -43,8 +45,8 @@ def guess_text(data: bytes) -> bool:
     return control / max(len(decoded), 1) < 0.02
 
 
-def format_hex_lines(data: bytes, width: int = 16) -> List[str]:
-    lines: List[str] = []
+def format_hex_lines(data: bytes, width: int = 16) -> list[str]:
+    lines: list[str] = []
     for offset in range(0, len(data), width):
         chunk = data[offset : offset + width]
         hex_part = " ".join(f"{b:02x}" for b in chunk)
@@ -62,7 +64,7 @@ def make_hex(data: bytes, width: int = 16, limit: int = MAX_PREVIEW_BYTES) -> st
     return "\n".join(lines)
 
 
-def wav_peaks(path: str, bins: int = 1200) -> Tuple[np.ndarray, float, int, int]:
+def wav_peaks(path: str, bins: int = 1200) -> tuple[np.ndarray, float, int, int]:
     import wave
 
     peaks = np.zeros((bins, 2), dtype=np.float32)
@@ -120,9 +122,9 @@ def _compute_normals(verts: np.ndarray, tris: np.ndarray) -> np.ndarray:
 
 
 def parse_obj(data: bytes):
-    verts: List[Tuple[float, float, float]] = []
-    uvs: List[Tuple[float, float]] = []
-    faces: List[List[int]] = []
+    verts: list[tuple[float, float, float]] = []
+    uvs: list[tuple[float, float]] = []
+    faces: list[list[int]] = []
     for line in data.decode("utf-8", "replace").splitlines():
         parts = line.split()
         if not parts:
@@ -138,7 +140,7 @@ def parse_obj(data: bytes):
             except ValueError:
                 continue
         elif parts[0] == "f" and len(parts) >= 4:
-            indices: List[int] = []
+            indices: list[int] = []
             valid = True
             for part in parts[1:]:
                 try:
@@ -151,7 +153,7 @@ def parse_obj(data: bytes):
     if not verts:
         return None
     v = np.asarray(verts, dtype=np.float32)
-    tri_list: List[Tuple[int, int, int]] = []
+    tri_list: list[tuple[int, int, int]] = []
     edge_set = set()
     for face in faces:
         for i in range(1, len(face) - 1):
@@ -172,7 +174,7 @@ def parse_obj(data: bytes):
 
 
 def cache_key(archive_path: str, size: int) -> str:
-    digest = hashlib.sha256(f"{archive_path}:{size}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(f"{archive_path}:{size}".encode()).hexdigest()[:16]
     return digest
 
 
@@ -184,7 +186,7 @@ def write_cached(cache_root: str, key: str, filename: str, data: bytes) -> str:
     return str(path)
 
 
-def read_cached(cache_root: str, key: str, filename: str) -> Optional[bytes]:
+def read_cached(cache_root: str, key: str, filename: str) -> bytes | None:
     path = Path(cache_root) / key / filename
     if path.is_file():
         try:
@@ -194,14 +196,14 @@ def read_cached(cache_root: str, key: str, filename: str) -> Optional[bytes]:
     return None
 
 
-def wav_info(path: str) -> Tuple[int, int]:
+def wav_info(path: str) -> tuple[int, int]:
     import wave
 
     with wave.open(path, "rb") as wf:
         return wf.getframerate(), wf.getnframes()
 
 
-def sniff_image(data: bytes) -> Optional["QImage"]:
+def sniff_image(data: bytes) -> QImage | None:
     """Decode a raw image payload by magic number (png/jpeg/gif/bmp/webp)."""
     from PySide6.QtGui import QImage
 
@@ -231,6 +233,7 @@ def sniff_image(data: bytes) -> Optional["QImage"]:
             if decoded is not None:
                 return pil_to_qimage(decoded)
         except Exception:
+            logger.debug("GPU texture container could not be decoded", exc_info=True)
             return None
     return None
 
@@ -260,6 +263,7 @@ def sniff_audio(data: bytes, filename: str, cache_root: str, key: str):
     try:
         from dualforge.audio import Vgmstream
     except Exception:
+        logger.debug("vgmstream not available; showing raw audio file", exc_info=True)
         return None
     vg = Vgmstream()
     if vg.available():
@@ -275,6 +279,7 @@ def sniff_audio(data: bytes, filename: str, cache_root: str, key: str):
                 "channels": channels,
             }
         except Exception:
+            logger.debug("vgmstream conversion failed; showing raw audio file", exc_info=True)
             pass
     raw_path = write_cached(cache_root, key, f"{stem}.{ext or 'bin'}", data)
     return {

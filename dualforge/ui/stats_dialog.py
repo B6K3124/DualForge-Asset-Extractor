@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,8 +22,8 @@ class StatsDialog(QDialog):
         self.resize(420, 460)
 
         layout = QVBoxLayout(self)
-        counts: Dict[str, int] = defaultdict(int)
-        sizes: Dict[str, int] = defaultdict(int)
+        counts: dict[str, int] = defaultdict(int)
+        sizes: dict[str, int] = defaultdict(int)
         total_files = 0
         total_size = 0
         for top_index in range(tree.topLevelItemCount()):

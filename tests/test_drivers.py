@@ -198,7 +198,7 @@ def test_registry_has_popular_moddable_games():
 
 def test_popular_game_drivers_are_valid_json():
     names = {d.name: d for d in BUILTIN_DRIVERS}
-    for name, driver in names.items():
+    for _name, driver in names.items():
         text = driver.to_json()
         raw = json.loads(text)
         assert DRIVER_MAGIC in raw

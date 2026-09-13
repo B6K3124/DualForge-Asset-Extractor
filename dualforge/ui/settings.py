@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -33,11 +32,11 @@ class Settings:
     preview_cache_dir: str = ""
     default_aes_key: str = ""
     try_all_keys: bool = True
-    sync_endpoints: List[str] = field(default_factory=list)
+    sync_endpoints: list[str] = field(default_factory=list)
     donation_url: str = "https://ko-fi.com/b6000"
-    export_formats: Dict[str, str] = field(default_factory=dict)
-    profiles: List[dict] = field(default_factory=list)
-    recent_files: List[str] = field(default_factory=list)
+    export_formats: dict[str, str] = field(default_factory=dict)
+    profiles: list[dict] = field(default_factory=list)
+    recent_files: list[str] = field(default_factory=list)
     window_geometry: str = ""
     window_state: str = ""
     _path: str = field(default="", repr=False, compare=False)
@@ -54,7 +53,7 @@ class Settings:
         del self.recent_files[10:]
 
     @classmethod
-    def load(cls, path: str | None = None) -> "Settings":
+    def load(cls, path: str | None = None) -> Settings:
         settings = cls()
         settings._path = path or str(DEFAULT_SETTINGS_PATH)
         try:
@@ -143,7 +142,7 @@ class SettingsDialog(QDialog):
 
         from dualforge.export.convert import DEFAULT_FORMATS, format_choices
 
-        self.format_combos: Dict[str, QComboBox] = {}
+        self.format_combos: dict[str, QComboBox] = {}
         for type_name, label in (
             ("Texture2D", "Texture format"),
             ("Sprite", "Sprite format"),

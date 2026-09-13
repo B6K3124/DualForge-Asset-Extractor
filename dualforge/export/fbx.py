@@ -26,7 +26,8 @@ import math
 import os
 import struct
 import zlib
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 
 # FBX time resolution: 1 second == 46186158000 internal KTime ticks.
 _FBX_TICKS = 46186158000
@@ -135,9 +136,9 @@ class _Elem:
 
     def __init__(self, name: str) -> None:
         self.name = name
-        self.props: List[_Prop] = []
-        self.children: List[_Elem] = []
-        self.obj_id: Optional[int] = None  # set for objects added to the graph
+        self.props: list[_Prop] = []
+        self.children: list[_Elem] = []
+        self.obj_id: int | None = None  # set for objects added to the graph
         self._plen = 0
         self._end = 0
 
@@ -177,7 +178,7 @@ def _use_binary(binary: bool) -> bool:
 
 
 # ---------------------------------------------------------------- matrices --
-def _mat4_mul(a: Sequence[float], b: Sequence[float]) -> List[float]:
+def _mat4_mul(a: Sequence[float], b: Sequence[float]) -> list[float]:
     out = [0.0] * 16
     for i in range(4):
         for j in range(4):
@@ -185,9 +186,9 @@ def _mat4_mul(a: Sequence[float], b: Sequence[float]) -> List[float]:
     return out
 
 
-def _mat4_invert(m: Sequence[float]) -> Optional[List[float]]:
+def _mat4_invert(m: Sequence[float]) -> list[float] | None:
     """Invert a row-major 4x4 (Unity convention, translation in last column)."""
-    inv: List[float] = [0.0] * 16
+    inv: list[float] = [0.0] * 16
     inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10]
     inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10]
     inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9]
@@ -215,7 +216,7 @@ def _mat4_invert(m: Sequence[float]) -> Optional[List[float]]:
     return [v * scale for v in inv]
 
 
-def _mat3_to_quat(row3: Sequence[float]) -> List[float]:
+def _mat3_to_quat(row3: Sequence[float]) -> list[float]:
     """"Row-major 3x3 (9 floats) to unit quaternion [x, y, z, w]."""
     m = [float(v) for v in row3]
     trace = m[0] + m[4] + m[8]
@@ -249,24 +250,21 @@ def _mat3_to_quat(row3: Sequence[float]) -> List[float]:
     return [x / length, y / length, z / length, w / length]
 
 
-def _quat_to_euler(q: Sequence[float]) -> List[float]:
+def _quat_to_euler(q: Sequence[float]) -> list[float]:
     """Quaternion [x, y, z, w] to Euler XYZ degrees (FBX Lcl Rotation order)."""
     x, y, z, w = (float(v) for v in q)
     sinr_cosp = 2.0 * (w * x + y * z)
     cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
     roll = math.atan2(sinr_cosp, cosr_cosp)
     sinp = 2.0 * (w * y - z * x)
-    if abs(sinp) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sinp)
-    else:
-        pitch = math.asin(sinp)
+    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     yaw = math.atan2(siny_cosp, cosy_cosp)
     return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
 
 
-def decompose_trs(row_major: Sequence[float]) -> Tuple[List[float], List[float], List[float]]:
+def decompose_trs(row_major: Sequence[float]) -> tuple[list[float], list[float], list[float]]:
     """Split a row-major 4x4 (Unity layout) into (translation, euler_xyz, scale)."""
     m = [float(v) for v in row_major]
     translation = [m[3], m[7], m[11]]
@@ -283,7 +281,7 @@ def decompose_trs(row_major: Sequence[float]) -> Tuple[List[float], List[float],
     return translation, euler, [1.0 if s < 1e-12 else s for s in scales]
 
 
-def _to_fbx_mat4(row_major: Sequence[float]) -> List[float]:
+def _to_fbx_mat4(row_major: Sequence[float]) -> list[float]:
     """FBX matrices are stored column-major; transpose the Unity rows."""
     m = [float(v) for v in row_major]
     return [m[col * 4 + row] for col in range(4) for row in range(4)]
@@ -300,8 +298,8 @@ class _Graph:
     )
 
     def __init__(self) -> None:
-        self.objects: List[_Elem] = []
-        self.connections: List[_Elem] = []
+        self.objects: list[_Elem] = []
+        self.connections: list[_Elem] = []
         self._next_id = 1000
 
     def new_id(self) -> int:
@@ -320,7 +318,7 @@ class _Graph:
         self.objects.append(elem)
         return elem
 
-    def connect(self, child: int, parent: int, prop: Optional[str] = None) -> None:
+    def connect(self, child: int, parent: int, prop: str | None = None) -> None:
         conn = _Elem("C")
         conn.props.append(_S("OP" if prop else "OO"))
         conn.props.append(_L(child))
@@ -332,7 +330,7 @@ class _Graph:
     connect_prop = connect
 
     # ---------------------------------------------------- ASCII rendering --
-    def _element_lines(self, elem: _Elem, depth: int) -> List[str]:
+    def _element_lines(self, elem: _Elem, depth: int) -> list[str]:
         ind = "    " * depth
         if not elem.children:
             if elem.name == "P":
@@ -346,10 +344,7 @@ class _Graph:
             if len(segs) == 1:
                 return [f"{ind}{elem.name}: {segs[0]}"]
             return [f"{ind}{elem.name}: " + ",".join(segs)]
-        if elem.props:
-            head = f"{ind}{elem.name}: {elem.props[0].display} {{"
-        else:
-            head = f"{ind}{elem.name}:  {{"
+        head = f"{ind}{elem.name}: {elem.props[0].display} {{" if elem.props else f"{ind}{elem.name}:  {{"
         lines = [head]
         for child in elem.children:
             lines.extend(self._element_lines(child, depth + 1))
@@ -357,7 +352,7 @@ class _Graph:
         return lines
 
     def _objects_body(self) -> str:
-        lines: List[str] = []
+        lines: list[str] = []
         for elem in self.objects:
             head = f"{elem.name} {elem.props[0].display}"
             # FBX names embed the class as "<name>\x00\x01<class>"; render that
@@ -378,16 +373,16 @@ class _Graph:
         return "\n".join(lines)
 
     def _element_lines_each(self, elems: Sequence[_Elem], depth: int) -> str:
-        lines: List[str] = []
+        lines: list[str] = []
         for elem in elems:
             lines.extend(self._element_lines(elem, depth))
         return "\n".join(lines)
 
     def _definitions(self) -> str:
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for elem in self.objects:
             counts[elem.name] = counts.get(elem.name, 0) + 1
-        lines: List[str] = []
+        lines: list[str] = []
         for obj_type in self._DEF_ORDER:
             count = counts.get(obj_type, 0)
             if count or obj_type == "GlobalSettings":
@@ -450,7 +445,7 @@ Connections:  {{
         gs = _Elem("GlobalSettings")
         gs.children.append(_leaf("Version", _I(1000)))
         props = _Elem("Properties70")
-        rows: List[Tuple[str, str, str, str, Sequence[_Prop]]] = [
+        rows: list[tuple[str, str, str, str, Sequence[_Prop]]] = [
             ("UpAxis", "int", "Integer", "", (_I(1),)),
             ("UpAxisSign", "int", "Integer", "", (_I(1),)),
             ("FrontAxis", "int", "Integer", "", (_I(2),)),
@@ -474,7 +469,7 @@ Connections:  {{
         defs = _Elem("Definitions")
         defs.children.append(_leaf("Version", _I(100)))
         defs.children.append(_leaf("Count", _I(len(self.objects))))
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for elem in self.objects:
             counts[elem.name] = counts.get(elem.name, 0) + 1
         for obj_type in self._DEF_ORDER:
@@ -527,7 +522,7 @@ def _write_binary(path: str, graph: _Graph) -> str:
         return offset
 
     size = len(_HEAD_MAGIC) + 4
-    for idx, elem in enumerate(top):
+    for _idx, elem in enumerate(top):
         size = calc(elem, size, elem is top[-1])
 
     out = bytearray()
@@ -549,7 +544,7 @@ def _write_binary(path: str, graph: _Graph) -> str:
         elif (not elem.props and not is_last) or elem.name.encode() in _ALWAYS_SENTINEL:
             out.extend(b"\x00" * 13)
 
-    for idx, elem in enumerate(top):
+    for _idx, elem in enumerate(top):
         write_elem(elem, elem is top[-1])
 
     # trailing block sentinel: ends the top-level stream so the FBX SDK /
@@ -578,15 +573,15 @@ def write_fbx_mesh(
     name: str,
     vertices: Sequence[Sequence[float]],
     triangles: Sequence[Sequence[int]],
-    normals: Optional[Sequence[Sequence[float]]] = None,
-    uvs: Optional[Sequence[Sequence[float]]] = None,
+    normals: Sequence[Sequence[float]] | None = None,
+    uvs: Sequence[Sequence[float]] | None = None,
     *,
-    bone_names: Optional[Sequence[str]] = None,
-    bone_parents: Optional[Sequence[int]] = None,
-    bind_matrices: Optional[Sequence[Sequence[float]]] = None,
-    joints: Optional[Sequence[Sequence[int]]] = None,
-    weights: Optional[Sequence[Sequence[float]]] = None,
-    blendshapes: Optional[Sequence[Dict[str, Any]]] = None,
+    bone_names: Sequence[str] | None = None,
+    bone_parents: Sequence[int] | None = None,
+    bind_matrices: Sequence[Sequence[float]] | None = None,
+    joints: Sequence[Sequence[int]] | None = None,
+    weights: Sequence[Sequence[float]] | None = None,
+    blendshapes: Sequence[dict[str, Any]] | None = None,
     binary: bool = True,
 ) -> str:
     """Write a (optionally skinned) mesh to FBX 7.4 (binary by default).
@@ -612,13 +607,13 @@ def write_fbx_mesh(
     skinned = bool(bone_names and bone_parents and bind_matrices and joints and weights)
 
     # ---- bone nodes -------------------------------------------------------
-    bone_ids: List[_Elem] = []
+    bone_ids: list[_Elem] = []
     if skinned:
-        world: List[List[float]] = []
+        world: list[list[float]] = []
         for bind in bind_matrices:
             rest_world = _mat4_invert([float(v) for v in bind])
             world.append(rest_world or [float(v) for v in bind])
-        local: List[List[float]] = []
+        local: list[list[float]] = []
         for idx in range(len(world)):
             parent = bone_parents[idx]
             if 0 <= parent < len(world):
@@ -639,22 +634,22 @@ def write_fbx_mesh(
 
     # ---- mesh geometry ----------------------------------------------------
     pos_flat = [float(v) for vert in vertices for v in vert[:3]]
-    normal_flat: List[float] = []
+    normal_flat: list[float] = []
     if normals:
         for n in normals:
             normal_flat.extend((float(n[0]), float(n[1]), float(n[2])))
-    uv_flat: List[float] = []
+    uv_flat: list[float] = []
     if uvs:
         for uv in uvs:
             uv_flat.extend((float(uv[0]), 1.0 - float(uv[1])))  # FBX V is up
 
-    flat_index: List[int] = []
+    flat_index: list[int] = []
     for tri in triangles:
         a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
         flat_index.extend((c, b, -(a + 1)))  # FBX polygons are CCW + negated end
 
     geometry = graph.add_object("Geometry", node_name, "Mesh")
-    geom_kids: List[_Elem] = [_leaf("Vertices", _F64A(pos_flat))]
+    geom_kids: list[_Elem] = [_leaf("Vertices", _F64A(pos_flat))]
     geom_kids.append(_leaf("PolygonVertexIndex", _I32A(flat_index)))
     geom_kids.append(_leaf("GeometryVersion", _I(124)))
     if normal_flat:
@@ -712,8 +707,8 @@ def write_fbx_mesh(
     graph.connect(mesh_model.obj_id, root.obj_id)
 
     # ---- skin deformer ----------------------------------------------------
-    skin_id: Optional[int] = None
-    cluster_ids: List[int] = []
+    skin_id: int | None = None
+    cluster_ids: list[int] = []
     if skinned:
         skin = graph.add_object("Deformer", f"{node_name}_Skin", "Skin")
         skin.children.extend(
@@ -722,9 +717,12 @@ def write_fbx_mesh(
         skin_id = skin.obj_id
         graph.connect_prop(skin_id, geometry.obj_id, "Deformers")
 
-        bone_vertex_weights: Dict[int, List[Tuple[int, float]]] = {}
-        for vert_index, (vert_joints, vert_weights) in enumerate(zip(joints, weights)):
-            pair = list(zip(vert_joints, vert_weights))
+        bone_vertex_weights: dict[int, list[tuple[int, float]]] = {}
+        for vert_index, (vert_joints, vert_weights) in enumerate(zip(joints, weights, strict=True)):
+            pair = [
+                (vert_joints[k], vert_weights[k])
+                for k in range(min(len(vert_joints), len(vert_weights)))
+            ]
             pair = sorted(pair, key=lambda item: -float(item[1]))[:4]
             total = sum(float(w) for _, w in pair) or 1.0
             for bone_index, wt in pair:
@@ -757,7 +755,7 @@ def write_fbx_mesh(
 
         # ---- bind pose ----------------------------------------------------
         pose = graph.add_object("Pose", "Pose", "BindPose")
-        pose_kids: List[_Elem] = [
+        pose_kids: list[_Elem] = [
             _leaf("Type", _S("BindPose")),
             _leaf("NbPoseNodes", _I(len(bone_ids))),
         ]
@@ -773,13 +771,13 @@ def write_fbx_mesh(
             graph.connect_prop(mesh_model.obj_id, bone_ids[0].obj_id, "Skeleton")
 
     # ---- morph targets ----------------------------------------------------
-    for shape_index, shape in enumerate(blendshapes or []):
+    for _shape_index, shape in enumerate(blendshapes or []):
         shape_name = _sanitize(str(shape.get("name", "Shape")))
         deltas = shape.get("positions") or []
         normal_deltas = shape.get("normals") or []
-        affected: List[int] = []
-        delta_flat: List[float] = []
-        normal_flat_delta: List[float] = []
+        affected: list[int] = []
+        delta_flat: list[float] = []
+        normal_flat_delta: list[float] = []
         for idx, delta in enumerate(deltas):
             d = [float(v) for v in delta[:3]]
             if math.sqrt(sum(v * v for v in d)) > 1e-6:
@@ -820,15 +818,15 @@ def write_fbx_mesh(
     return _write_binary(path, graph)
 
 
-def _d3(value: float) -> Tuple[_Prop, _Prop, _Prop]:
+def _d3(value: float) -> tuple[_Prop, _Prop, _Prop]:
     return (_D(value), _D(value), _D(value))
 
 
-def _num3(values: Sequence[float]) -> Tuple[_Prop, _Prop, _Prop]:
+def _num3(values: Sequence[float]) -> tuple[_Prop, _Prop, _Prop]:
     return (_D(values[0]), _D(values[1]), _D(values[2]))
 
 
-def _identity() -> List[float]:
+def _identity() -> list[float]:
     return [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
 
@@ -836,7 +834,7 @@ def _identity() -> List[float]:
 def write_fbx_animation(
     path: str,
     name: str,
-    tracks: Dict[str, Dict[str, List[Tuple[float, Sequence[float]]]]],
+    tracks: dict[str, dict[str, list[tuple[float, Sequence[float]]]]],
     fps: float = 60.0,
     binary: bool = True,
 ) -> str:
@@ -859,7 +857,7 @@ def write_fbx_animation(
     root.children.append(_props70((_p_entry("Lcl Translation", "Lcl Translation", "", "A", _d3(0)),)))
 
     # one model node per animated path
-    node_ids: Dict[str, int] = {}
+    node_ids: dict[str, int] = {}
     for node_name in tracks:
         node_name = _sanitize(str(node_name)) or "Node"
         node = graph.add_object("Model", node_name, "Null")
@@ -871,7 +869,7 @@ def write_fbx_animation(
     target_builder = {"translation": "Lcl Translation", "rotation": "Lcl Rotation", "scale": "Lcl Scaling"}
     axis_channel = ("d|X", "d|Y", "d|Z")
 
-    def make_curve(prefix: str, times: List[int], values: List[float]) -> int:
+    def make_curve(prefix: str, times: list[int], values: list[float]) -> int:
         curve = graph.add_object(
             "AnimationCurve", f"{prefix}_T_{times[0] if times else 0}_{len(values)}", "", name_class="AnimCurve"
         )

@@ -3,11 +3,10 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
 
 from dualforge.compression import sniff
+from dualforge.constants import PAK_MAGIC
 
-PAK_MAGIC = 0x5A6F12E1
 UTOC_MAGIC = b"-==--==--==--==-"
 BSA_MAGIC = b"BSA\x00"
 BA2_MAGIC = b"BTD\x00"
@@ -42,7 +41,7 @@ class Detection:
     engine: str
     kind: str
     path: str
-    details: Dict[str, object] = field(default_factory=dict)
+    details: dict[str, object] = field(default_factory=dict)
 
     def summary(self) -> str:
         lines = [f"Engine : {self.engine}", f"Kind   : {self.kind}"]
@@ -51,14 +50,14 @@ class Detection:
         return "\n".join(lines)
 
 
-def detect(path: str) -> Optional[Detection]:
+def detect(path: str) -> Detection | None:
     header = _read_header(path)
     if header is None:
         return None
     return detect_header(header, Path(path).name, path)
 
 
-def detect_header(header: bytes, filename: str, path: str = "") -> Optional[Detection]:
+def detect_header(header: bytes, filename: str, path: str = "") -> Detection | None:
     if len(header) >= 4 and struct.unpack_from("<I", header, 0)[0] == PAK_MAGIC:
         version = struct.unpack_from("<I", header, 4)[0] if len(header) >= 8 else None
         return Detection(
@@ -127,21 +126,21 @@ def _detect_ba2(header: bytes, path: str) -> Detection:
 
 
 def _detect_rdar(header: bytes, path: str) -> Detection:
-    details: Dict[str, object] = {}
+    details: dict[str, object] = {}
     if len(header) >= 8:
         details["rdar_version"] = struct.unpack_from("<I", header, 4)[0]
     return Detection(engine="cdpr", kind="rdar", path=path, details=details)
 
 
 def _detect_il2cpp_metadata(header: bytes, path: str) -> Detection:
-    details: Dict[str, object] = {}
+    details: dict[str, object] = {}
     if len(header) >= 8:
         details["metadata_version"] = struct.unpack_from("<i", header, 4)[0]
     return Detection(engine="unity", kind="il2cpp-metadata", path=path, details=details)
 
 
 def _detect_dds(header: bytes, path: str) -> Detection:
-    details: Dict[str, object] = {}
+    details: dict[str, object] = {}
     if len(header) >= 20:
         width, height = struct.unpack_from("<II", header, 12)
         details["width"] = width
@@ -214,7 +213,7 @@ def _parse_unityfs_header(header: bytes, sig_len: int) -> tuple:
     return (version, header[pos:end].decode("utf-8", "replace"))
 
 
-def _read_header(path: str, size: int = 32) -> Optional[bytes]:
+def _read_header(path: str, size: int = 32) -> bytes | None:
     try:
         with open(path, "rb") as fh:
             return fh.read(size)

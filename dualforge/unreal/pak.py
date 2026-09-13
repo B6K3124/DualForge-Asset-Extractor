@@ -7,7 +7,11 @@ import sys
 import threading
 import types
 from pathlib import Path
-from typing import Dict, List, Optional
+
+from dualforge.constants import PAK_MAGIC
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class PakError(Exception):
@@ -15,7 +19,7 @@ class PakError(Exception):
 
 
 class _OodleContext(threading.local):
-    archive_path: Optional[str] = None
+    archive_path: str | None = None
 
 
 _oodle_ctx = _OodleContext()
@@ -78,7 +82,7 @@ def _preload_oodle_patch() -> None:
 _OODLE_PATTERNS = ("oo2core_*_win64.dll", "oo2core_*_linux64.so", "oo2core_*_mac64.dylib")
 
 
-def _find_game_oodle(archive_path: Optional[str] = None) -> Optional[Path]:
+def _find_game_oodle(archive_path: str | None = None) -> Path | None:
     """Locate a game-shipped Oodle DLL.
 
     Search order: the open archive's folder chain (up to 3 parent levels plus
@@ -86,7 +90,7 @@ def _find_game_oodle(archive_path: Optional[str] = None) -> Optional[Path]:
     then the working directory, ~/.dualforge, and PATH.
     """
     seen: set = set()
-    dirs: List[str] = []
+    dirs: list[str] = []
     if archive_path:
         current = Path(archive_path).resolve().parent
         for _ in range(3):
@@ -128,7 +132,7 @@ def _import_pyuepak():
 _preload_oodle_patch()
 
 
-def _probe_key_list(aes_key: Optional[str], try_all_keys: bool) -> List[tuple]:
+def _probe_key_list(aes_key: str | None, try_all_keys: bool) -> list[tuple]:
     """Build the ordered (title, key) probe list: no-key first, then the
     stored key store, then the explicitly provided/default key.
 
@@ -137,7 +141,7 @@ def _probe_key_list(aes_key: Optional[str], try_all_keys: bool) -> List[tuple]:
     blindly handing them to pyuepak's single-key ``set_key`` - those archives
     need the CUE4Parse bridge. Returns list of ``(title, key, can_set_key)``.
     """
-    probes: List[tuple] = [(None, None, True)]
+    probes: list[tuple] = [(None, None, True)]
     seen_keys = {None}
     if try_all_keys:
         try:
@@ -151,7 +155,7 @@ def _probe_key_list(aes_key: Optional[str], try_all_keys: bool) -> List[tuple]:
                     probes.append((entry.title, key, True))
                     seen_keys.add(key)
         except Exception:
-            pass
+            logger.debug("key-store probing unavailable", exc_info=True)
     if aes_key:
         key = aes_key.strip()
         if key and key not in seen_keys:
@@ -159,7 +163,7 @@ def _probe_key_list(aes_key: Optional[str], try_all_keys: bool) -> List[tuple]:
     return probes
 
 
-def _is_aes_keyable(scheme: Optional[str], key: str) -> bool:
+def _is_aes_keyable(scheme: str | None, key: str) -> bool:
     """True when a key should be handed to pyuepak's single-key ``set_key``.
 
     Only plain AES-256 (or absent scheme) with a plausible note is keyable;
@@ -174,13 +178,12 @@ def _is_aes_keyable(scheme: Optional[str], key: str) -> bool:
     return all(c in "0123456789abcdef" for c in cleaned)
 
 
-def pak_footer_version(path: str) -> Optional[int]:
+def pak_footer_version(path: str) -> int | None:
     """Read the pak footer version without opening the archive (best effort).
 
     Returns the PakVersion enum value (e.g. 13 for a V12/UE 5.4+ archive),
     or None when the file is not a readable pak.
     """
-    paK_magic = 0x5A6F12E1
     try:
         with open(path, "rb") as fh:
             size = fh.seek(0, 2)
@@ -189,7 +192,7 @@ def pak_footer_version(path: str) -> Optional[int]:
                     continue
                 fh.seek(size - back)
                 magic = int.from_bytes(fh.read(4), "little")
-                if magic != paK_magic:
+                if magic != PAK_MAGIC:
                     continue
                 stored = int.from_bytes(fh.read(4), "little")
                 if back in (44, 172):
@@ -211,20 +214,20 @@ class PakArchive:
     def __init__(
         self,
         path: str,
-        aes_key: Optional[str] = None,
+        aes_key: str | None = None,
         try_all_keys: bool = True,
     ):
         PakFile = _import_pyuepak()
         self.path = str(path)
         self.version = 0
         self.is_encrypted = False
-        self.key_title: Optional[str] = None
-        self.key_source: Optional[str] = None
+        self.key_title: str | None = None
+        self.key_source: str | None = None
         self._lock = threading.Lock()
         self._pak = self._open(PakFile, aes_key, try_all_keys)
-        self._entries: Dict[str, int] = self._read_sizes()
+        self._entries: dict[str, int] = self._read_sizes()
 
-    def _open(self, PakFile, aes_key: Optional[str], try_all_keys: bool):
+    def _open(self, PakFile, aes_key: str | None, try_all_keys: bool):
         probes = _probe_key_list(aes_key, try_all_keys)
         attempts = []
         _oodle_ctx.archive_path = self.path
@@ -240,6 +243,7 @@ class PakArchive:
                 try:
                     pak.read(self.path)
                 except Exception:
+                    logger.debug("key %r did not open %s", title, self.path, exc_info=True)
                     continue
                 if pak.count == 0:
                     continue
@@ -268,19 +272,19 @@ class PakArchive:
             f"File > Manage Keys or paste it into Settings.{chunk_hint}"
         )
 
-    def _read_sizes(self) -> Dict[str, int]:
+    def _read_sizes(self) -> dict[str, int]:
         index = getattr(self._pak, "_index", None)
         entrys = getattr(index, "entrys", None) if index is not None else None
         if not isinstance(entrys, dict):
             return {}
-        sizes: Dict[str, int] = {}
+        sizes: dict[str, int] = {}
         for path, entry in entrys.items():
             size = getattr(entry, "size", 0) or 0
             if size:
                 sizes[path] = int(size)
         return sizes
 
-    def list_files(self) -> List[str]:
+    def list_files(self) -> list[str]:
         with self._lock:
             return list(self._pak.list_files())
 
@@ -304,10 +308,9 @@ class PakArchive:
                 _oodle_ctx.archive_path = None
 
     def extract_file(self, path: str, out_dir: str) -> str:
-        data = self.read_file(path)
-        from dualforge.export import Exporter
+        from dualforge.export.exporter import write_entry
 
-        return Exporter(out_dir).write(_rel_path(path), data)
+        return write_entry(out_dir, _rel_path(path), self.read_file(path))
 
     def close(self) -> None:
         pass

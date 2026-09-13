@@ -3,7 +3,6 @@ from __future__ import annotations
 import ctypes
 import glob
 import os
-from typing import List, Optional
 
 
 class OodleUnavailableError(Exception):
@@ -34,12 +33,12 @@ class Oodle:
         ],
     )
 
-    def __init__(self, dll_path: Optional[str] = None, search_paths: Optional[List[str]] = None):
-        self.path: Optional[str] = None
-        self._libs: List[ctypes.CDLL] = []
+    def __init__(self, dll_path: str | None = None, search_paths: list[str] | None = None):
+        self.path: str | None = None
+        self._libs: list[ctypes.CDLL] = []
         self._load(dll_path, search_paths)
 
-    def _candidate_dirs(self, search_paths: Optional[List[str]]) -> List[str]:
+    def _candidate_dirs(self, search_paths: list[str] | None) -> list[str]:
         dirs = []
         if search_paths:
             dirs += list(search_paths)
@@ -51,7 +50,7 @@ class Oodle:
         dirs += [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
         return dirs
 
-    def _candidates(self, dirs: List[str]) -> List[str]:
+    def _candidates(self, dirs: list[str]) -> list[str]:
         patterns = ("oo2core_*_win64.dll", "oo2core_*_linux64.so", "oo2core_*_mac64.dylib")
         seen = set()
         out = []
@@ -64,7 +63,7 @@ class Oodle:
                         out.append(key)
         return out
 
-    def _load(self, dll_path: Optional[str], search_paths: Optional[List[str]]) -> None:
+    def _load(self, dll_path: str | None, search_paths: list[str] | None) -> None:
         candidates = [dll_path] if dll_path else []
         candidates += self._candidates(self._candidate_dirs(search_paths))
         for path in candidates:
@@ -87,7 +86,7 @@ class Oodle:
             return b""
         raw_out = ctypes.create_string_buffer(output_size)
         comp_buf = ctypes.c_char_p(data)
-        for lib, sig in zip(self._libs, self._SIGNATURES):
+        for lib, sig in zip(self._libs, self._SIGNATURES, strict=True):
             try:
                 func = lib.OodleLZ_Decompress
                 func.restype = ctypes.c_int64

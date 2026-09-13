@@ -6,9 +6,9 @@ import json
 import sys
 import tempfile
 import types
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout, suppress
 from pathlib import Path
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
@@ -37,7 +37,7 @@ EXIT_SETUP = 6
 EXIT_ANALYSIS = 7
 
 
-def ghidra_script_path() -> Optional[Path]:
+def ghidra_script_path() -> Path | None:
     """Locate ghidra_key_finder.py in source and frozen (PyInstaller) builds."""
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
@@ -51,7 +51,7 @@ def ghidra_script_path() -> Optional[Path]:
     return None
 
 
-def load_key_finder() -> Optional[types.ModuleType]:
+def load_key_finder() -> types.ModuleType | None:
     """Import the key-finder script by path (never imported by the app)."""
     path = ghidra_script_path()
     if path is None:
@@ -87,7 +87,7 @@ class GhidraSignals(QObject):
 
 
 class GhidraWorker(QThread):
-    def __init__(self, argv: List[str], tasks: Optional[List[List[str]]] = None):
+    def __init__(self, argv: list[str], tasks: list[list[str]] | None = None):
         super().__init__()
         self.argv = argv
         self.tasks = tasks
@@ -102,7 +102,7 @@ class GhidraWorker(QThread):
             self.failed.emit("The Ghidra key-finder script was not found.")
             return
         if self.tasks:
-            codes: List[int] = []
+            codes: list[int] = []
             for task in self.tasks:
                 self.log.emit(f"=== Scanning {Path(task[0]).name} ===")
                 try:
@@ -134,12 +134,12 @@ class GhidraWorker(QThread):
 
 
 class GhidraDialog(QDialog):
-    def __init__(self, parent=None, default_binary: Optional[str] = None):
+    def __init__(self, parent=None, default_binary: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("Ghidra Key Hunt")
         self.resize(760, 560)
-        self._worker: Optional[GhidraWorker] = None
-        self._result_json: Optional[str] = None
+        self._worker: GhidraWorker | None = None
+        self._result_json: str | None = None
         self._result_owned = False
         self._close_when_done = False
 
@@ -330,8 +330,8 @@ class GhidraDialog(QDialog):
             )
             return
 
-        tasks: List[List[str]] = []
-        json_paths: List[str] = []
+        tasks: list[list[str]] = []
+        json_paths: list[str] = []
         import os
 
         for binary, _score in ranked:
@@ -344,7 +344,7 @@ class GhidraDialog(QDialog):
         self._result_owned = True
         self._run_worker([], tasks=tasks)
 
-    def _hunt_argv(self, binary: str) -> List[str]:
+    def _hunt_argv(self, binary: str) -> list[str]:
         argv = [
             binary,
             "--entropy-threshold",
@@ -360,7 +360,7 @@ class GhidraDialog(QDialog):
             argv.append("--no-auto-install")
         return argv
 
-    def _run_worker(self, argv: List[str], tasks: Optional[List[List[str]]] = None) -> None:
+    def _run_worker(self, argv: list[str], tasks: list[list[str]] | None = None) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self.results_table.setVisible(False)
@@ -394,10 +394,10 @@ class GhidraDialog(QDialog):
 
     def _show_results(self, json_path) -> None:
         paths = json_path if isinstance(json_path, list) else ([json_path] if json_path else [])
-        matches: List[dict] = []
+        matches: list[dict] = []
         total_bytes = 0
         duration = 0.0
-        added: List[str] = []
+        added: list[str] = []
         for path in paths:
             try:
                 result = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -447,10 +447,8 @@ class GhidraDialog(QDialog):
                 else [self._result_json]
             )
             for path in paths:
-                try:
+                with suppress(OSError):
                     os.unlink(path)
-                except OSError:
-                    pass
             self._result_json = None
             self._result_owned = False
 

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from dualforge.encryption.registry import KeyMaterial
+from dualforge.log import get_logger
+import builtins
+
+logger = get_logger(__name__)
 
 DEFAULT_ENDPOINTS = [
     "https://fortnitecentral.ga/api/v1/aes",
@@ -22,6 +26,31 @@ def _fold(text: str) -> str:
     return "".join(ch.lower() for ch in text if ch.isalnum())
 
 
+_MAIN_KEY_FIELDS = ("mainKey", "main_key", "aes_key", "key")
+_DYNAMIC_KEY_FIELDS = ("dynamicKeys", "dynamic_keys")
+
+
+def _main_key(value: dict) -> str:
+    """Return the first non-empty main-key field found on ``value`` ("" if none)."""
+    for key_name in _MAIN_KEY_FIELDS:
+        candidate = value.get(key_name)
+        if candidate:
+            return str(candidate)
+    return ""
+
+
+def _dynamic_keys(value: dict) -> dict[str, str]:
+    """Return the dynamic-key GUID map on ``value`` ({} if absent)."""
+    raw = None
+    for key_name in _DYNAMIC_KEY_FIELDS:
+        if value.get(key_name):
+            raw = value[key_name]
+            break
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
 @dataclass
 class KeyEntry:
     title: str
@@ -29,10 +58,10 @@ class KeyEntry:
     engine: str = "unreal"
     notes: str = ""
     updated: str = ""
-    dynamic_keys: Dict[str, str] = field(default_factory=dict)
+    dynamic_keys: dict[str, str] = field(default_factory=dict)
     scheme: str = DEFAULT_SCHEME
     guid: str = ""
-    parameters: Dict[str, str] = field(default_factory=dict)
+    parameters: dict[str, str] = field(default_factory=dict)
 
     def to_material(self) -> KeyMaterial:
         """Build a registry ``KeyMaterial`` for this entry for use in pipelines."""
@@ -43,19 +72,16 @@ class KeyEntry:
             parameters=dict(self.parameters),
         )
 
-    def as_dict(self) -> Dict[str, object]:
+    def as_dict(self) -> dict[str, object]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> "KeyEntry":
+    def from_dict(cls, data: dict[str, object]) -> KeyEntry:
         title = str(data.get("title", ""))
         key = str(data.get("aes_key", data.get("key", "")) or "")
         scheme = str(data.get("scheme", DEFAULT_SCHEME) or DEFAULT_SCHEME)
         params = data.get("parameters")
-        if isinstance(params, dict):
-            params = {str(k): str(v) for k, v in params.items()}
-        else:
-            params = {}
+        params = {str(k): str(v) for k, v in params.items()} if isinstance(params, dict) else {}
         dynamic_raw = data.get("dynamic_keys", data.get("dynamicKeys", {})) or {}
         dynamic = {str(k): str(v) for k, v in dynamic_raw.items()} if isinstance(dynamic_raw, dict) else {}
         return cls(
@@ -72,16 +98,34 @@ class KeyEntry:
 
 
 class KeyStore:
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: str | None = None):
         self.path = path or str(Path.home() / ".dualforge" / "keys.json")
-        self._entries: Dict[str, KeyEntry] = {}
+        self._entries: dict[str, KeyEntry] = {}
         self._load()
 
     def _load(self) -> None:
         try:
-            with open(self.path, "r", encoding="utf-8") as fh:
+            with open(self.path, encoding="utf-8") as fh:
                 raw = json.load(fh)
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("could not read key store %s: %s", self.path, exc)
+            return
+        except json.JSONDecodeError:
+            corrupted = Path(self.path)
+            backup = corrupted.with_name(
+                f"keys.json.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            )
+            try:
+                os.replace(self.path, backup)
+                logger.warning(
+                    "key store %s was corrupt; backed it up to %s and started fresh",
+                    self.path,
+                    backup,
+                )
+            except OSError:
+                logger.warning("key store %s was corrupt and could not be backed up", self.path)
             return
         for key, value in raw.items():
             if isinstance(value, str):
@@ -93,18 +137,22 @@ class KeyStore:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as fh:
             json.dump({k: v.as_dict() for k, v in self._entries.items()}, fh, indent=2)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            logger.debug("could not restrict key store permissions on %s", self.path, exc_info=True)
 
-    def list(self) -> List[KeyEntry]:
+    def list(self) -> builtins.list[KeyEntry]:
         return list(self._entries.values())
 
-    def get(self, title: str) -> Optional[str]:
+    def get(self, title: str) -> str | None:
         entry = self._entries.get(title)
         return entry.aes_key if entry else None
 
-    def get_entry(self, title: str) -> Optional[KeyEntry]:
+    def get_entry(self, title: str) -> KeyEntry | None:
         return self._entries.get(title)
 
-    def find_for_archive(self, archive_path: str) -> Optional[KeyEntry]:
+    def find_for_archive(self, archive_path: str) -> KeyEntry | None:
         """Best-effort match of a stored entry to an archive path.
 
         Every path component (folder names and the file name) is matched
@@ -116,7 +164,7 @@ class KeyStore:
 
         path_lower = archive_path.replace("\\", "/").lower()
         parts = [p for p in Path(path_lower).parts if p]
-        best: Optional[KeyEntry] = None
+        best: KeyEntry | None = None
         best_score = -1
         for entry in self._entries.values():
             title = entry.title.lower()
@@ -141,10 +189,10 @@ class KeyStore:
         aes_key: str,
         engine: str = "unreal",
         notes: str = "",
-        dynamic_keys: Optional[Dict[str, str]] = None,
+        dynamic_keys: dict[str, str] | None = None,
         scheme: str = DEFAULT_SCHEME,
         guid: str = "",
-        parameters: Optional[Dict[str, str]] = None,
+        parameters: dict[str, str] | None = None,
     ) -> None:
         if not title or not aes_key:
             raise ValueError("title and aes_key are required")
@@ -170,9 +218,9 @@ class KeyStore:
 
     def import_mapping(
         self,
-        mapping: Dict[str, str],
+        mapping: dict[str, str],
         engine: str = "unreal",
-        dynamic: Optional[Dict[str, Dict[str, str]]] = None,
+        dynamic: dict[str, dict[str, str]] | None = None,
     ) -> int:
         count = 0
         for title, key in mapping.items():
@@ -208,7 +256,7 @@ class KeyStore:
 
         Format: {"GameName": {"mainKey": "0x...", "dynamicKeys": {"guid": "0x..."}}}
         """
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             payload = json.load(fh)
         if not isinstance(payload, dict):
             raise ValueError("FModel key file must contain a JSON object")
@@ -216,12 +264,8 @@ class KeyStore:
         for title, value in payload.items():
             if not isinstance(value, dict):
                 continue
-            main_key = ""
-            for candidate in ("mainKey", "main_key", "aes_key", "key"):
-                if value.get(candidate):
-                    main_key = str(value[candidate])
-                    break
-            dynamic = value.get("dynamicKeys") or value.get("dynamic_keys") or {}
+            main_key = _main_key(value)
+            dynamic = _dynamic_keys(value)
             if not main_key:
                 continue
             existing = self._entries.get(title)
@@ -245,20 +289,25 @@ class KeyStore:
                 count += 1
         return count
 
-    def sync(self, endpoints: List[str]) -> Dict[str, int]:
+    def sync(self, endpoints: builtins.list[str]) -> dict[str, int]:
         import requests
 
-        synced: Dict[str, int] = {}
+        synced: dict[str, int] = {}
         for endpoint in endpoints:
-            response = requests.get(endpoint, timeout=30)
-            response.raise_for_status()
-            payload = response.json()
+            try:
+                response = requests.get(endpoint, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("key sync failed for %s: %s", endpoint, exc)
+                synced[endpoint] = 0
+                continue
             mapping, dynamic = _extract_keys(payload)
             synced[endpoint] = self.import_mapping(mapping, dynamic=dynamic)
         return synced
 
 
-def _extract_keys(payload) -> Tuple[Dict[str, str], Dict[str, Dict[str, str]]]:
+def _extract_keys(payload) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     """Extract main + dynamic keys from a community endpoint payload.
 
     Supports FModel-style {"games": {...}}, FortniteCentral's
@@ -267,8 +316,8 @@ def _extract_keys(payload) -> Tuple[Dict[str, str], Dict[str, Dict[str, str]]]:
     Returns (main_keys, dynamic) where dynamic maps title ->
     {"keys": {...}, "new": bool}.
     """
-    mapping: Dict[str, str] = {}
-    dynamic: Dict[str, Dict[str, str]] = {}
+    mapping: dict[str, str] = {}
+    dynamic: dict[str, dict[str, str]] = {}
     if not isinstance(payload, dict):
         return mapping, dynamic
     source = payload
@@ -285,22 +334,18 @@ def _extract_keys(payload) -> Tuple[Dict[str, str], Dict[str, Dict[str, str]]]:
         if isinstance(value, str):
             mapping[title] = value
         elif isinstance(value, dict):
-            main_key = ""
-            for field in ("mainKey", "main_key", "aes_key", "key"):
-                if value.get(field):
-                    main_key = str(value[field])
-                    break
+            main_key = _main_key(value)
             if main_key:
                 mapping[title] = main_key
-            dynamic_keys = value.get("dynamicKeys") or value.get("dynamic_keys")
-            if isinstance(dynamic_keys, dict):
-                dynamic[title] = {str(k): str(v) for k, v in dynamic_keys.items()}
-    for field in ("mainKey", "main_key", "aes_key", "key"):
-        if source.get(field):
-            mapping["Fortnite"] = str(source[field])
-            dynamic_keys = source.get("dynamicKeys") or source.get("dynamic_keys")
-            if isinstance(dynamic_keys, dict):
-                dynamic["Fortnite"] = {str(k): str(v) for k, v in dynamic_keys.items()}
+            dynamic_keys = _dynamic_keys(value)
+            if dynamic_keys:
+                dynamic[title] = dynamic_keys
+    for key_name in _MAIN_KEY_FIELDS:
+        if source.get(key_name):
+            mapping["Fortnite"] = str(source[key_name])
+            dynamic_keys = _dynamic_keys(source)
+            if dynamic_keys:
+                dynamic["Fortnite"] = dynamic_keys
             break
     return mapping, dynamic
 

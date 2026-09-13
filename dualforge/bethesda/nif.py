@@ -10,12 +10,14 @@ diffuse texture so a mesh can be drawn textured.
 from __future__ import annotations
 
 import struct
-from typing import List, Optional, Tuple
 
 import numpy as np
 
 from dualforge.bethesda import BethesdaError
 from dualforge.export.gltf_reader import MeshGeometry
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 NIF_VERSION_SSE = 0x14020007
 
@@ -75,7 +77,7 @@ class R:
         self.pos += 4
         return v
 
-    def float3(self) -> Tuple[float, float, float]:
+    def float3(self) -> tuple[float, float, float]:
         return (self.f32(), self.f32(), self.f32())
 
     def half(self) -> float:
@@ -84,10 +86,10 @@ class R:
         self.pos += 2
         return v
 
-    def half3(self) -> Tuple[float, float, float]:
+    def half3(self) -> tuple[float, float, float]:
         return (self.half(), self.half(), self.half())
 
-    def half2(self) -> Tuple[float, float]:
+    def half2(self) -> tuple[float, float]:
         return (self.half(), self.half())
 
     def bytes(self, n: int) -> bytes:
@@ -107,7 +109,7 @@ def _sized_string(reader: R) -> str:
     return raw.decode("latin-1", "replace")
 
 
-def parse_nif(data: bytes) -> "NifFile":
+def parse_nif(data: bytes) -> NifFile:
     nif = NifFile(data)
     nif.read_header()
     return nif
@@ -116,7 +118,7 @@ def parse_nif(data: bytes) -> "NifFile":
 class NifBlock:
     __slots__ = ("index", "type_name", "offset", "size", "string_table")
 
-    def __init__(self, index: int, type_name: str, offset: int, size: int, string_table: List[str]):
+    def __init__(self, index: int, type_name: str, offset: int, size: int, string_table: list[str]):
         self.index = index
         self.type_name = type_name
         self.offset = offset
@@ -136,9 +138,9 @@ class NifBlock:
 class NifFile:
     def __init__(self, data: bytes):
         self.data = data
-        self.blocks: List[NifBlock] = []
-        self.strings: List[str] = []
-        self.roots: List[int] = []
+        self.blocks: list[NifBlock] = []
+        self.strings: list[str] = []
+        self.roots: list[int] = []
 
     def read_header(self) -> None:
         data = self.data
@@ -181,9 +183,9 @@ class NifFile:
                 types.append(data[table_end + 4 : table_end + 4 + ln].decode("latin-1", "replace"))
                 table_end += 4 + ln
             p = table_end
-            type_indices = struct.unpack_from("<%dH" % num_blocks, data, p)
+            type_indices = struct.unpack_from(f"<{num_blocks}H", data, p)
             p += 2 * num_blocks
-            sizes = struct.unpack_from("<%dI" % num_blocks, data, p)
+            sizes = struct.unpack_from(f"<{num_blocks}I", data, p)
             p += 4 * num_blocks
             num_strings, _max_string_len = struct.unpack_from("<II", data, p)
             p += 8
@@ -195,7 +197,7 @@ class NifFile:
             p += 4 + 4 * num_groups
             num_roots, = struct.unpack_from("<I", data, p)
             p += 4
-            self.roots = list(struct.unpack_from("<%dI" % num_roots, data, p))
+            self.roots = list(struct.unpack_from(f"<{num_roots}I", data, p))
             p += 4 * num_roots
             off = p
             for i in range(num_blocks):
@@ -215,7 +217,7 @@ def _normbyte(b: int) -> float:
     return (b - 128.0) / 127.0 if b != 128 else 0.0
 
 
-def _strips_to_triangles(strips: List[int], lengths: List[int]) -> List[Tuple[int, int, int]]:
+def _strips_to_triangles(strips: list[int], lengths: list[int]) -> list[tuple[int, int, int]]:
     tris = []
     pos = 0
     for ln in lengths:
@@ -223,7 +225,7 @@ def _strips_to_triangles(strips: List[int], lengths: List[int]) -> List[Tuple[in
         pos += ln
         for i in range(ln - 2):
             a, b, c = strip[i], strip[i + 1], strip[i + 2]
-            if a == b or b == c or a == c:
+            if a in (b, c) or b == c:
                 continue
             if i % 2 == 0:
                 tris.append((a, b, c))
@@ -253,7 +255,7 @@ def _shape_prefix(nif: NifFile, block: NifBlock) -> R:
     return r, shader_ref
 
 
-def read_dynamic_tri_shape(nif: NifFile, block: NifBlock) -> Optional[np.ndarray]:
+def read_dynamic_tri_shape(nif: NifFile, block: NifBlock) -> np.ndarray | None:
     """World-space vertex positions from a BSDynamicTriShape buffer.
 
     Skyrim SE stores the animated (dynamic) vertex buffer for models like
@@ -309,8 +311,8 @@ def _vertex_row(reader: R, arg: int) -> tuple:
 
 
 def read_skin_partition(
-    nif: NifFile, block: NifBlock, dynamic_vertices: Optional[np.ndarray] = None
-) -> Optional[dict]:
+    nif: NifFile, block: NifBlock, dynamic_vertices: np.ndarray | None = None
+) -> dict | None:
     """Mesh from a SSE NiSkinPartition: shared interleaved vertex buffer
     plus per-partition triangle copies.
 
@@ -368,7 +370,7 @@ def read_skin_partition(
         p += 1
         if has_w:
             p += 4 * nv * nwp  # vertex weights (full floats)
-        strip_lengths = struct.unpack_from("<%dH" % ns, data, p) if ns else ()
+        strip_lengths = struct.unpack_from(f"<{ns}H", data, p) if ns else ()
         p += 2 * ns  # strip lengths
         has_faces = data[p]
         p += 1
@@ -383,7 +385,7 @@ def read_skin_partition(
         p += 2  # LOD level, Global VB
         p += 8  # partition vertex desc
         if nt > 0:
-            tri = struct.unpack_from("<%dH" % (nt * 3), data, p)
+            tri = struct.unpack_from(f"<{nt * 3}H", data, p)
             for k in range(0, len(tri), 3):
                 a, b, c = tri[k : k + 3]
                 if a < num_vertices and b < num_vertices and c < num_vertices:
@@ -495,7 +497,7 @@ def read_bstri_shape(nif: NifFile, block: NifBlock) -> dict:
     }
 
 
-def _shape_texture(nif: NifFile, shader_index: int) -> Optional[str]:
+def _shape_texture(nif: NifFile, shader_index: int) -> str | None:
     if not (0 <= shader_index < len(nif.blocks)):
         return None
     shader = nif.blocks[shader_index]
@@ -515,6 +517,7 @@ def _shape_texture(nif: NifFile, shader_index: int) -> Optional[str]:
         s.skip(8)  # uv scale
         texture_set_ref = s.u32()
     except Exception:
+        logger.debug("shader property %d could not be parsed", shader_index, exc_info=True)
         return None
     if not (0 <= texture_set_ref < len(nif.blocks)):
         return None
@@ -534,13 +537,14 @@ def _shape_texture(nif: NifFile, shader_index: int) -> Optional[str]:
             if not first:
                 first = raw.decode("latin-1", "replace")
     except Exception:
+        logger.debug("texture set %d could not be parsed", texture_set_ref, exc_info=True)
         return None
     if not first:
         return None
     return first.replace("\\", "/").rstrip("\x00").removeprefix("textures/")
 
 
-def read_geometry(nif: NifFile) -> Optional[MeshGeometry]:
+def read_geometry(nif: NifFile) -> MeshGeometry | None:
     """MeshGeometry for the first render-able geometry block in the NIF.
 
     Static props decode from their BSTriShape directly; skinned models
@@ -567,6 +571,7 @@ def read_geometry(nif: NifFile) -> Optional[MeshGeometry]:
         except BethesdaError:
             continue
         except Exception:
+            logger.debug("geometry block %s could not be decoded", block.type_name, exc_info=True)
             continue
     if not candidates and dynamic_shapes:
         verts, shader_ref = dynamic_shapes[0]
@@ -576,6 +581,7 @@ def read_geometry(nif: NifFile) -> Optional[MeshGeometry]:
             try:
                 m = read_skin_partition(nif, block, verts)
             except Exception:
+                logger.debug("skin partition %s could not be decoded", block.type_name, exc_info=True)
                 continue
             if m is not None:
                 m["texture_name"] = _shape_texture(nif, shader_ref)

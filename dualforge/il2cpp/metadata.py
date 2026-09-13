@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from collections.abc import Iterator
 
 MAGIC = 0xFAB11BAF
 MIN_SUPPORTED = 22
@@ -89,7 +89,7 @@ _LITERAL_ENTRY = 8
 @dataclass
 class MetadataInfo:
     version: int
-    sections: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+    sections: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     @property
     def string_literal_count(self) -> int:
@@ -125,7 +125,7 @@ def parse_metadata(data: bytes) -> MetadataInfo:
         raise MetadataError(
             f"not an IL2CPP metadata file (magic 0x{magic:08X}, expected 0x{MAGIC:08X})"
         )
-    sections: Dict[str, Tuple[int, int]] = {}
+    sections: dict[str, tuple[int, int]] = {}
     cursor = 8
     for name, lo, hi in HEADER_ORDER:
         if lo is not None and version < lo:
@@ -148,7 +148,7 @@ def _i32(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset:offset + 4], "little", signed=True)
 
 
-def iter_string_literals(data: bytes) -> Iterator[Tuple[int, bytes]]:
+def iter_string_literals(data: bytes) -> Iterator[tuple[int, bytes]]:
     """Yield ``(index, raw_bytes)`` for every string literal in the pool.
 
     Works on the modern combined layout (v22+): a ``StringLiteral`` array
@@ -188,12 +188,12 @@ def string_text(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def dump_strings(data: bytes, out_path: Optional[str] = None, prefix: str = "0x") -> Tuple[int, Optional[str]]:
+def dump_strings(data: bytes, out_path: str | None = None, prefix: str = "0x") -> tuple[int, str | None]:
     """Dump every string literal to stdout or a file (il2cppdumper -nns style).
 
     Returns ``(count, path_or_None)``.
     """
-    lines: List[str] = []
+    lines: list[str] = []
     for index, raw in iter_string_literals(data):
         label = f"{prefix}{index:08X}"
         lines.append(f"{label} {string_text(raw)}")

@@ -7,7 +7,6 @@ GPU textures, plus convenience loading for write-back imports.
 from __future__ import annotations
 
 import struct
-from typing import List
 
 
 def load_image(path: str):
@@ -41,7 +40,7 @@ def load_image(path: str):
     return image.convert("RGBA") if image.mode != "RGBA" else image
 
 
-def image_to_rgba_rows(image) -> List[bytes]:
+def image_to_rgba_rows(image) -> list[bytes]:
     """Return per-row top-to-bottom RGBA byte rows (handles odd widths/stride)."""
     rgba = image.convert("RGBA")
     width, height = rgba.size

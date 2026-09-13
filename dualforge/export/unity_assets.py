@@ -9,9 +9,13 @@ is unavailable (e.g. stripped or obfuscated bundles).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from UnityPy.files import ObjectReader
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
 def json_default(value: Any) -> Any:
@@ -20,7 +24,7 @@ def json_default(value: Any) -> Any:
     return str(value)
 
 
-def typetree_dict(asset) -> Optional[Dict[str, Any]]:
+def typetree_dict(asset) -> dict[str, Any] | None:
     """Return the full typed object tree of a Unity asset as a JSON-able dict.
 
     Returns None when the object does not carry a readable type tree
@@ -32,10 +36,11 @@ def typetree_dict(asset) -> Optional[Dict[str, Any]]:
     try:
         return reader.read_typetree()
     except Exception:
+        logger.debug("type tree unavailable for %s", getattr(asset, "path", "object"), exc_info=True)
         return None
 
 
-def typetree_json(asset, indent: int = 2) -> Optional[str]:
+def typetree_json(asset, indent: int = 2) -> str | None:
     tree = typetree_dict(asset)
     if tree is None:
         return None
@@ -45,7 +50,7 @@ def typetree_json(asset, indent: int = 2) -> Optional[str]:
         return str(tree)
 
 
-def monobehaviour_json(asset, indent: int = 2) -> Optional[str]:
+def monobehaviour_json(asset, indent: int = 2) -> str | None:
     """Serialize a MonoBehaviour to JSON using its type tree."""
     return typetree_json(asset, indent=indent)
 
@@ -63,6 +68,7 @@ def shader_to_text(asset) -> str:
     try:
         obj = reader.read()
     except Exception:
+        logger.debug("shader object could not be read; using type tree", exc_info=True)
         obj = None
     name = ""
     if obj is not None:
@@ -96,11 +102,12 @@ def _shader_source_text(obj) -> str:
     return ""
 
 
-def font_data(asset) -> Optional[bytes]:
+def font_data(asset) -> bytes | None:
     """Extract the raw font bytes (TTF/OTF) from a Unity Font asset."""
     try:
         obj = asset._reader.read()
     except Exception:
+        logger.debug("font asset could not be read", exc_info=True)
         return None
     data = getattr(obj, "m_FontData", None)
     if isinstance(data, (bytes, bytearray)):
@@ -111,7 +118,7 @@ def font_data(asset) -> Optional[bytes]:
     return None
 
 
-def object_reader(asset) -> Optional[ObjectReader]:
+def object_reader(asset) -> ObjectReader | None:
     return getattr(asset, "_reader", None)
 
 

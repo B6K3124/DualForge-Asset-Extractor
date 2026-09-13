@@ -38,7 +38,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
+import contextlib
 
 CHUNK_SIZE = 4 * 1024 * 1024
 CONNECT_PORT = 4768  # ghidra_bridge package default server port
@@ -93,7 +94,7 @@ AES_SBOX_INV = bytes(
     ]
 )
 
-PRESETS: Dict[str, bytes] = {
+PRESETS: dict[str, bytes] = {
     "aes_sbox": AES_SBOX,
     "aes_sbox_inv": AES_SBOX_INV,
 }
@@ -125,7 +126,7 @@ class Match:
     block: str
     offset: int
     address: str = ""
-    candidates: List[Candidate] = field(default_factory=list)
+    candidates: list[Candidate] = field(default_factory=list)
 
 
 def shannon_entropy(data: bytes) -> float:
@@ -163,13 +164,13 @@ def collect_candidates(
     max_length: int = 32,
     threshold: float = 3.5,
     max_per_match: int = 20,
-) -> List[Candidate]:
+) -> list[Candidate]:
     """Pull high-entropy hex key-sized windows from a context buffer.
 
     ``context_offset`` is the context's offset within the containing block.
     Windows are sized as ``2 * key_length`` hex characters.
     """
-    found: Dict[Tuple[int, int], Candidate] = {}
+    found: dict[tuple[int, int], Candidate] = {}
     for key_length in range(min_length, max_length + 1):
         window_size = key_length * 2
         for i in range(0, len(context) - window_size + 1):
@@ -192,10 +193,10 @@ def collect_candidates(
 
 def scan_for_signatures(
     data: bytes,
-    signatures: Dict[str, bytes],
+    signatures: dict[str, bytes],
     base_offset: int = 0,
-) -> List[Tuple[str, int]]:
-    hits: List[Tuple[str, int]] = []
+) -> list[tuple[str, int]]:
+    hits: list[tuple[str, int]] = []
     for name, signature in signatures.items():
         start = 0
         while True:
@@ -210,7 +211,7 @@ def scan_for_signatures(
 def scan_memory(
     blocks: Sequence[MemoryBlock],
     fetch: Callable[[str, int, int], bytes],
-    signatures: Dict[str, bytes],
+    signatures: dict[str, bytes],
     chunk_size: int,
     entropy_enabled: bool,
     context_size: int,
@@ -218,9 +219,9 @@ def scan_memory(
     max_length: int,
     threshold: float,
     max_per_match: int,
-) -> List[Match]:
+) -> list[Match]:
     """Walk every block in overlapped chunks and collect signature hits."""
-    matches: List[Match] = []
+    matches: list[Match] = []
     max_sig = max((len(s) for s in signatures.values()), default=0)
     overlap = max(max_sig, 2 * max_length) - 1
     for block in blocks:
@@ -236,7 +237,7 @@ def scan_memory(
                 context_start = max(0, offset - context_size)
                 context_end = min(block.size, offset + context_size + max(max_sig, 2 * max_length))
                 context = fetch(block.name, context_start, context_end - context_start)
-                candidates: List[Candidate] = []
+                candidates: list[Candidate] = []
                 if entropy_enabled:
                     candidates = collect_candidates(
                         context,
@@ -256,7 +257,7 @@ def scan_memory(
                     )
                 )
             cursor += size - (overlap if cursor + size < block.size else 0)
-    unique: Dict[Tuple[str, str, int], Match] = {}
+    unique: dict[tuple[str, str, int], Match] = {}
     for match in matches:
         unique.setdefault((match.block, match.signature, match.offset), match)
     return list(unique.values())
@@ -270,9 +271,9 @@ def entropy_only_scan(
     max_length: int,
     threshold: float,
     max_per_match: int,
-) -> List[Match]:
+) -> list[Match]:
     """Signature-free pass: harvest high-entropy windows anywhere."""
-    matches: List[Match] = []
+    matches: list[Match] = []
     overlap = 2 * max_length - 1
     for block in blocks:
         if block.size <= 0 or not block.initialized:
@@ -302,7 +303,7 @@ def entropy_only_scan(
                     )
                 )
             cursor += size - (overlap if cursor + size < block.size else 0)
-    unique: Dict[Tuple[str, int], Match] = {}
+    unique: dict[tuple[str, int], Match] = {}
     for match in matches:
         unique.setdefault((match.block, match.offset), match)
     return list(unique.values())
@@ -315,7 +316,7 @@ def hex_string_to_bytes(value: str) -> bytes:
     return bytes.fromhex(cleaned)
 
 
-def parse_hex_key(value: str) -> Optional[str]:
+def parse_hex_key(value: str) -> str | None:
     cleaned = value.strip().lower()
     if cleaned.startswith("0x"):
         cleaned = cleaned[2:]
@@ -331,8 +332,8 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def find_analyze_headless() -> Optional[Path]:
-    candidates: List[Path] = []
+def find_analyze_headless() -> Path | None:
+    candidates: list[Path] = []
     home = os.environ.get("GHIDRA_HOME")
     if home:
         root = Path(home)
@@ -366,7 +367,7 @@ def find_analyze_headless() -> Optional[Path]:
     return None
 
 
-def find_java() -> Optional[str]:
+def find_java() -> str | None:
     if os.environ.get("JAVA_HOME"):
         candidate = Path(os.environ["JAVA_HOME"]) / "bin" / ("java.exe" if _is_windows() else "java")
         if candidate.is_file():
@@ -377,7 +378,7 @@ def find_java() -> Optional[str]:
     return None
 
 
-def _java_major(path: str) -> Optional[int]:
+def _java_major(path: str) -> int | None:
     flags = 0
     if os.name == "nt":
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -405,7 +406,7 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def find_ghidra_scripts_dir() -> Optional[Path]:
+def find_ghidra_scripts_dir() -> Path | None:
     """Locate the pip package's bridge server script directory.
 
     ghidra-bridge <1.1 ships it under ``ghidra_scripts/``; 1.0.0 moved it
@@ -423,7 +424,7 @@ def find_ghidra_scripts_dir() -> Optional[Path]:
     return None
 
 
-def prepare_server_scripts(work_dir: Path) -> Optional[str]:
+def prepare_server_scripts(work_dir: Path) -> str | None:
     """Stage the bridge server + jfx_bridge for Jython in ``work_dir``.
 
     ghidra-bridge 1.0.0's ``ghidra_bridge_server.py`` imports
@@ -465,7 +466,7 @@ def ensure_ghidra_bridge(allow_install: bool, log: Callable[[str], None]) -> Non
             raise RuntimeError(
                 "ghidra_bridge is not installed. Install it with "
                 "'pip install ghidra-bridge' or re-run with auto-install enabled."
-            )
+            ) from None
         log("ghidra_bridge not found - installing (pip install ghidra-bridge)...")
         flags = 0
         if os.name == "nt":
@@ -481,7 +482,7 @@ def ensure_ghidra_bridge(allow_install: bool, log: Callable[[str], None]) -> Non
             raise RuntimeError(
                 f"auto-install of ghidra_bridge failed: "
                 f"{completed.stderr.strip() or completed.stdout.strip()}"
-            )
+            ) from None
         log("ghidra_bridge installed.")
 
 
@@ -500,10 +501,11 @@ class GhidraSession:
         self.project_dir = self.work_dir / "project"
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self.stop_file = self.work_dir / "stop.flag"
-        self.process: Optional[subprocess.Popen] = None
+        self.process: subprocess.Popen | None = None
         self.bridge = None
+        self._log_stack = contextlib.ExitStack()
 
-    def launch(self, ghidra_scripts: Optional[Path] = None) -> None:
+    def launch(self, ghidra_scripts: Path | None = None) -> None:
         server_script = self.work_dir / "ghidra_key_finder_server.py"
         shutil.copy2(Path(__file__).with_name("ghidra_key_finder_server.py"), server_script)
         env = dict(os.environ)
@@ -522,8 +524,9 @@ class GhidraSession:
             command += ["-scriptPath", str(ghidra_scripts)]
         command += ["-postScript", "ghidra_key_finder_server.py", "-deleteProject"]
         self.log(f"launching analyzeHeadless (project under {self.project_dir})")
-        out = open(self.work_dir / "analyzeheadless.out.txt", "w", encoding="utf-8", errors="replace")
-        err = open(self.work_dir / "analyzeheadless.err.txt", "w", encoding="utf-8", errors="replace")
+        # Handles stay open for the child process lifetime; owned by _log_stack.
+        out = self._log_stack.enter_context(open(self.work_dir / "analyzeheadless.out.txt", "w", encoding="utf-8", errors="replace"))  # noqa: SIM115
+        err = self._log_stack.enter_context(open(self.work_dir / "analyzeheadless.err.txt", "w", encoding="utf-8", errors="replace"))  # noqa: SIM115
         self.log_files = (out, err)
         self.process = subprocess.Popen(
             command,
@@ -543,7 +546,7 @@ class GhidraSession:
         attempts = [self.port]
         if self.port != CONNECT_PORT:
             attempts.append(CONNECT_PORT)
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         while time.time() < deadline:
             if self.process and self.process.poll() is not None:
                 _, tail = self._collect_tail()
@@ -581,7 +584,7 @@ class GhidraSession:
         except OSError:
             return False
 
-    def _collect_tail(self) -> Tuple[str, str]:
+    def _collect_tail(self) -> tuple[str, str]:
         if not self.log_files:
             return "", ""
         out_path = self.work_dir / "analyzeheadless.out.txt"
@@ -602,18 +605,12 @@ class GhidraSession:
 
     def close_logs(self) -> None:
         if self.log_files:
-            for handle in self.log_files:
-                try:
-                    handle.close()
-                except OSError:
-                    pass
+            self._log_stack.close()
             self.log_files = None
 
     def shutdown(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self.stop_file.touch(exist_ok=True)
-        except OSError:
-            pass
         try:
             if self.bridge is not None:
                 self.bridge.remote_shutdown()
@@ -625,10 +622,8 @@ class GhidraSession:
             except subprocess.TimeoutExpired:
                 self.log("analyzeHeadless did not exit cleanly; terminating...")
                 self.process.kill()
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     self.process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    pass
         self.close_logs()
         shutil.rmtree(self.work_dir, ignore_errors=True)
 
@@ -665,7 +660,7 @@ def remote_fetch_function() -> str:
 
 def run_analysis(
     session: GhidraSession,
-    signatures: Dict[str, bytes],
+    signatures: dict[str, bytes],
     entropy_enabled: bool,
     chunk_size: int,
     context_size: int,
@@ -674,7 +669,7 @@ def run_analysis(
     threshold: float,
     max_per_match: int,
     log: Callable[[str], None],
-) -> Tuple[List[Match], List[MemoryBlock], int]:
+) -> tuple[list[Match], list[MemoryBlock], int]:
     bridge = session.bridge
     if bridge is None:
         raise RuntimeError("bridge not connected")
@@ -704,8 +699,7 @@ def run_analysis(
             return b""
         try:
             raw = bridge.remote_eval(
-                "__dualforge_fetch__(%r, %r, %r, %r)"
-                % (block_name, block.base, int(offset), int(size))
+                f"__dualforge_fetch__({block_name!r}, {block.base!r}, {int(offset)!r}, {int(size)!r})"
             )
         except Exception as exc:  # noqa: BLE001
             log(f"chunk fetch failed ({block_name}@{offset:#x}): {exc}")
@@ -745,11 +739,11 @@ def run_analysis(
 # ------------------------------------------------------------ key delivery
 
 
-def add_to_keystore(binary_path: str, matches: List[Match], count: int) -> List[str]:
+def add_to_keystore(binary_path: str, matches: list[Match], count: int) -> list[str]:
     """Write the strongest 32-byte hex candidates into DualForge's key store."""
     from dualforge.unreal.keys import KeyStore
 
-    candidates: Dict[str, float] = {}
+    candidates: dict[str, float] = {}
     for match in matches:
         for candidate in match.candidates:
             if candidate.length != 32:
@@ -762,7 +756,7 @@ def add_to_keystore(binary_path: str, matches: List[Match], count: int) -> List[
         return []
     stem = Path(binary_path).stem
     store = KeyStore()
-    added: List[str] = []
+    added: list[str] = []
     for index, (key, _entropy) in enumerate(ranked, start=1):
         title = f"{stem} [ghidra-{index}]"
         try:
@@ -874,7 +868,7 @@ def cmd_hunt(args: argparse.Namespace) -> int:
         print(f"error: binary not found: {binary}", file=sys.stderr)
         return 2
 
-    signatures: Dict[str, bytes] = {}
+    signatures: dict[str, bytes] = {}
     presets = args.preset or ["aes_sbox"]
     for preset in presets:
         signatures[f"preset:{preset}"] = PRESETS[preset]
@@ -960,7 +954,7 @@ def cmd_hunt(args: argparse.Namespace) -> int:
         session.shutdown()
 
     duration = round(time.time() - started, 2)
-    added_titles: List[str] = []
+    added_titles: list[str] = []
     if not args.no_add_keystore:
         try:
             added_titles = add_to_keystore(str(binary), matches, args.keystore_count)
@@ -1015,7 +1009,7 @@ def cmd_hunt(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.check:

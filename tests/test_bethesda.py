@@ -46,7 +46,7 @@ def test_bsa_roundtrip(tmp_path, version, compress):
 def test_bsa_size_of(tmp_path):
     path = _write(tmp_path, "game.bsa", build_bsa(files=FILES, version=105, compress=True))
     archive = BethesdaArchive(path)
-    for rel, _folder, data in FILES:
+    for rel, _folder, _data in FILES:
         assert archive.size_of(rel) > 0
     with pytest.raises(BethesdaError):
         archive.size_of("missing/file.bin")

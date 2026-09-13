@@ -51,4 +51,13 @@ def _sanitize(name: str) -> str:
     return "/".join(clean)
 
 
-__all__ = ["Exporter", "ExportError"]
+def write_entry(out_dir: str, rel_path: str, data: bytes, overwrite: bool = True) -> str:
+    """Write one extracted entry into ``out_dir`` and return the written path.
+
+    Thin wrapper over :class:`Exporter` so archive types (Bethesda, CDPR,
+    Unreal pak) expose a single-entry extract without rebuilding the writer.
+    """
+    return Exporter(out_dir, overwrite=overwrite).write(rel_path, data)
+
+
+__all__ = ["Exporter", "ExportError", "write_entry"]

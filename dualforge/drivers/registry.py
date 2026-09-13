@@ -8,9 +8,13 @@ Built-in drivers are loaded at startup; user drivers are loaded from
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from dualforge.drivers.driver import DRIVER_FILE_SUFFIX, GameDriver
+from dualforge.log import get_logger
+import builtins
+import contextlib
+
+logger = get_logger(__name__)
 
 DEFAULT_DRIVERS_DIR = Path.home() / ".dualforge" / "drivers"
 
@@ -23,7 +27,7 @@ class DriverRegistry:
     """Central registry for game drivers."""
 
     def __init__(self) -> None:
-        self._drivers: Dict[str, GameDriver] = {}
+        self._drivers: dict[str, GameDriver] = {}
         self._loaded = False
 
     def _ensure_loaded(self) -> None:
@@ -50,6 +54,7 @@ class DriverRegistry:
                 if driver.name not in self._drivers:
                     self._drivers[driver.name] = driver
             except Exception:
+                logger.debug("skipping unreadable driver file %s", path, exc_info=True)
                 continue
 
     # ── public API ────────────────────────────────────────────────────
@@ -59,15 +64,15 @@ class DriverRegistry:
         self._ensure_loaded()
         self._drivers[driver.name] = driver
 
-    def get(self, name: str) -> Optional[GameDriver]:
+    def get(self, name: str) -> GameDriver | None:
         self._ensure_loaded()
         return self._drivers.get(name)
 
-    def list(self) -> List[GameDriver]:
+    def list(self) -> builtins.list[GameDriver]:
         self._ensure_loaded()
         return list(self._drivers.values())
 
-    def names(self) -> List[str]:
+    def names(self) -> builtins.list[str]:
         self._ensure_loaded()
         return sorted(self._drivers)
 
@@ -76,10 +81,8 @@ class DriverRegistry:
         if name in self._drivers:
             del self._drivers[name]
             path = default_drivers_dir() / f"{name}{DRIVER_FILE_SUFFIX}"
-            try:
+            with contextlib.suppress(OSError):
                 path.unlink(missing_ok=True)
-            except OSError:
-                pass
             return True
         return False
 
@@ -87,15 +90,15 @@ class DriverRegistry:
         self,
         archive_path: str,
         mount: str = "",
-        engine: Optional[str] = None,
-    ) -> Optional[GameDriver]:
+        engine: str | None = None,
+    ) -> GameDriver | None:
         """Find the best-scoring driver for an archive.
 
         Optionally filters by engine type. Returns the highest-scoring
         driver or None if nothing scores above zero.
         """
         self._ensure_loaded()
-        best: Optional[GameDriver] = None
+        best: GameDriver | None = None
         best_score = 0.0
         best_is_generic = False
         best_hits = (0, 0)
@@ -142,7 +145,7 @@ class DriverRegistry:
 
     # ── file I/O ──────────────────────────────────────────────────────
 
-    def save(self, driver: GameDriver, path: Optional[str] = None) -> str:
+    def save(self, driver: GameDriver, path: str | None = None) -> str:
         """Export a driver to disk. Returns the written path."""
         self._ensure_loaded()
         self._drivers[driver.name] = driver
@@ -168,6 +171,7 @@ class DriverRegistry:
                 self._drivers[driver.name] = driver
                 count += 1
             except Exception:
+                logger.debug("skipping unreadable driver file %s", path, exc_info=True)
                 continue
         return count
 

@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
 
 
 class UnrealError(Exception):
@@ -13,24 +12,24 @@ class UnrealError(Exception):
 
 
 class UnrealBridge:
-    def __init__(self, cli_path: Optional[str] = None):
+    def __init__(self, cli_path: str | None = None):
         self.cli_path = cli_path or _find_cli()
 
     def available(self) -> bool:
         return self.cli_path is not None
 
-    def _cmd(self, args: List[str]) -> List[str]:
+    def _cmd(self, args: list[str]) -> list[str]:
         return [self.cli_path] + args
 
     def list_files(
         self,
         pak: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
-    ) -> List[Dict[str, object]]:
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
+    ) -> list[dict[str, object]]:
         self._require()
         uex = self._uex_adapter()
         if uex is not None:
@@ -45,12 +44,12 @@ class UnrealBridge:
         self,
         pak: str,
         out_dir: str,
-        aes_key: Optional[str] = None,
-        files: Optional[List[str]] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
+        aes_key: str | None = None,
+        files: list[str] | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
     ) -> int:
         self._require()
         uex = self._uex_adapter()
@@ -71,11 +70,11 @@ class UnrealBridge:
         self,
         pak: str,
         vpath: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
     ):
         """Preview one Unreal package as a mesh, returning ``(glb_bytes, kind)``
         or ``None`` when the package holds no readable mesh.
@@ -101,11 +100,11 @@ class UnrealBridge:
         pak: str,
         vpath: str,
         out_path: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
     ):
         """Export one Unreal package's mesh as a textured GLB to ``out_path``,
         returning the mesh kind (``staticmesh`` / ``skeletalmesh``) or ``None``
@@ -147,7 +146,7 @@ class UnrealBridge:
             return UexAdapter(self.cli_path)
         return None
 
-    def _run(self, args: List[str]) -> str:
+    def _run(self, args: list[str]) -> str:
         try:
             flags = 0
             if os.name == "nt":
@@ -171,7 +170,7 @@ class UnrealBridge:
         return completed.stdout or ""
 
 
-def _find_cli() -> Optional[str]:
+def _find_cli() -> str | None:
     env = os.environ.get("DUALFORGE_CUE4PARSE")
     if env and Path(env).is_file():
         return env
@@ -190,7 +189,7 @@ def _find_cli() -> Optional[str]:
     return None
 
 
-def _parse_list_output(output: str) -> List[Dict[str, object]]:
+def _parse_list_output(output: str) -> list[dict[str, object]]:
     output = output.strip()
     if not output:
         return []

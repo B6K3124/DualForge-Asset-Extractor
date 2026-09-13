@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -21,7 +20,7 @@ class WaveformWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(120)
-        self._peaks: Optional[np.ndarray] = None
+        self._peaks: np.ndarray | None = None
         self._duration: float = 0.0
         self._position: float = 0.0
         self._font = QFont("Consolas, Cascadia Mono, monospace")

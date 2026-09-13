@@ -6,9 +6,12 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
+from dualforge.log import get_logger
 from dualforge.unreal.bridge import UnrealError
+import contextlib
+
+logger = get_logger(__name__)
 
 # CUE4Parse EGame candidates per pak index version (see docs/COMPATIBILITY.md).
 # The pak "footer version" (pak_footer_version) lags the pak version by one:
@@ -27,7 +30,7 @@ from dualforge.unreal.bridge import UnrealError
 # (they carry their own FPackageFileVersion), so a nearby EGame still
 # serializes them correctly. The engine band of the footer also decides the
 # generic fallback order (_fallback_games).
-VERSION_GAMES: Dict[int, List[str]] = {
+VERSION_GAMES: dict[int, list[str]] = {
     3: ["GAME_UE3_0"],
     4: ["GAME_UE4_0", "GAME_UE4_1", "GAME_UE4_2", "GAME_UE4_3"],
     5: ["GAME_UE4_0", "GAME_UE4_1", "GAME_UE4_2", "GAME_UE4_3", "GAME_UE4_4"],
@@ -58,7 +61,7 @@ VERSION_GAMES: Dict[int, List[str]] = {
 }
 
 # Known games whose exact CUE4Parse EGame beats the generic engine version.
-FOLDER_GAMES: List[Tuple[str, str]] = [
+FOLDER_GAMES: list[tuple[str, str]] = [
     ("tekken 8", "GAME_UE5_2"),
     ("tekken", "GAME_TEKKEN7"),
     ("fortnite", "GAME_Fortnite"),
@@ -69,7 +72,7 @@ FOLDER_GAMES: List[Tuple[str, str]] = [
 
 # Map DualForge scheme/preset names to CUE4Parse EGame values so scheme-based
 # archives decrypt through the correct GameType profile.
-SCHEME_GAMES: Dict[str, str] = {
+SCHEME_GAMES: dict[str, str] = {
     "delta-force": "GAME_DeltaForce",
     "marvel-rivals": "GAME_MarvelRivals",
     "snowbreak": "GAME_Snowbreak",
@@ -93,10 +96,10 @@ _EXPORTED_RE = re.compile(
 # Successful EGame probes are shared across adapter instances (each bridge call
 # spins up a fresh UexAdapter), so cursor moves do not re-run the slow doctor
 # probe on every preview. Keyed by (paks_dir, aes, usmap, scheme).
-_EGAME_CACHE: Dict[Tuple[str, str, str, str], str] = {}
+_EGAME_CACHE: dict[tuple[str, str, str, str], str] = {}
 
 
-def normalize_aes_key(key: Optional[str]) -> Optional[str]:
+def normalize_aes_key(key: str | None) -> str | None:
     """uex profiles expect 0x-prefixed hex; DualForge stores bare hex."""
     if not key:
         return None
@@ -137,7 +140,7 @@ def _usmap_match_score(stem: str, tokens: frozenset) -> int:
     return sum(1 for token in tokens if token in fold)
 
 
-def find_usmap(paks_dir: str) -> Optional[str]:
+def find_usmap(paks_dir: str) -> str | None:
     """Locate a CUE4Parse mappings file for unversioned (UE5.3+) packages.
 
     Order: DUALFORGE_USMAP env var, a ``~/.dualforge/*.usmap`` whose name best
@@ -148,14 +151,14 @@ def find_usmap(paks_dir: str) -> Optional[str]:
     """
     from pathlib import Path
 
-    candidates: List[Path] = []
+    candidates: list[Path] = []
     env = os.environ.get("DUALFORGE_USMAP")
     if env:
         candidates.append(Path(env))
     user_maps = sorted(Path.home().glob(".dualforge/*.usmap"))
     tokens = _paks_tokens(paks_dir)
-    scored: List[tuple] = []
-    others: List[Path] = []
+    scored: list[tuple] = []
+    others: list[Path] = []
     for candidate in user_maps:
         score = _usmap_match_score(candidate.stem, tokens)
         if score > 0:
@@ -178,7 +181,7 @@ def find_usmap(paks_dir: str) -> Optional[str]:
     return None
 
 
-def _fallback_games(footer_version: Optional[int]) -> List[str]:
+def _fallback_games(footer_version: int | None) -> list[str]:
     """Engine-band-aware catch-alls tried only when folder/version hints bear
     no fruit, so an old pak is never mis-serialized as UE5 (and a future UE6
     pak still has a candidate)."""
@@ -187,9 +190,9 @@ def _fallback_games(footer_version: Optional[int]) -> List[str]:
     return ["GAME_UE5_LATEST", "GAME_UE6_LATEST", "GAME_UE4_LATEST"]
 
 
-def egame_candidates(paks_dir: str, footer_version: Optional[int]) -> List[str]:
+def egame_candidates(paks_dir: str, footer_version: int | None) -> list[str]:
     """Ordered list of EGame names to try for a pak folder."""
-    candidates: List[str] = []
+    candidates: list[str] = []
     lowered = paks_dir.lower()
     for needle, game in FOLDER_GAMES:
         if needle in lowered and game not in candidates:
@@ -204,7 +207,7 @@ def egame_candidates(paks_dir: str, footer_version: Optional[int]) -> List[str]:
     return candidates
 
 
-def parse_search_output(output: str) -> List[str]:
+def parse_search_output(output: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
@@ -218,7 +221,7 @@ def parse_export_summary(output: str) -> int:
 _MESH_RE = re.compile(r"meshexport:\s*([a-z0-9_]+)(?:\s*->.*)?", re.IGNORECASE)
 
 
-def parse_mesh_summary(output: str) -> Optional[str]:
+def parse_mesh_summary(output: str) -> str | None:
     """Extract the exported mesh kind (``staticmesh``/``skeletalmesh``/...) from
     uex ``preview-mesh`` output, or ``None`` when the package held no readable
     mesh (``meshexport: none``) or nothing was mentioned."""
@@ -242,19 +245,19 @@ class UexAdapter:
 
     def __init__(self, cli_path: str):
         self.cli_path = cli_path
-        self._games: Dict[str, str] = {}
+        self._games: dict[str, str] = {}
 
     # ------------------------------------------------------------- public API
 
     def list_files(
         self,
         pak: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
-    ) -> List[Dict[str, object]]:
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
+    ) -> list[dict[str, object]]:
         paks_dir = str(Path(pak).parent)
         if usmap is None:
             usmap = find_usmap(paks_dir)
@@ -293,12 +296,12 @@ class UexAdapter:
         self,
         pak: str,
         out_dir: str,
-        aes_key: Optional[str] = None,
-        files: Optional[List[str]] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
+        aes_key: str | None = None,
+        files: list[str] | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
     ) -> int:
         paks_dir = str(Path(pak).parent)
         game = self._game_for(paks_dir, aes_key, usmap, scheme, egame)
@@ -325,12 +328,12 @@ class UexAdapter:
         self,
         pak: str,
         vpath: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
-    ) -> Optional[Tuple[bytes, str]]:
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
+    ) -> tuple[bytes, str] | None:
         """Export one package's mesh as GLB via uex ``preview-mesh``.
 
         Returns ``(glb_bytes, kind)`` where ``kind`` is the exported Unreal
@@ -383,12 +386,12 @@ class UexAdapter:
         pak: str,
         vpath: str,
         out_path: str,
-        aes_key: Optional[str] = None,
-        usmap: Optional[str] = None,
-        dynamic_keys: Optional[Dict[str, str]] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
-    ) -> Optional[str]:
+        aes_key: str | None = None,
+        usmap: str | None = None,
+        dynamic_keys: dict[str, str] | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
+    ) -> str | None:
         """Export one Unreal package's mesh as a GLB directly to disk.
 
         Unlike ``preview_mesh`` the GLB (with baked base-color textures when
@@ -435,10 +438,10 @@ class UexAdapter:
     def _default_roots(
         self,
         pak: str,
-        aes_key: Optional[str],
-        usmap: Optional[str],
-        egame: Optional[str] = None,
-    ) -> List[str]:
+        aes_key: str | None,
+        usmap: str | None,
+        egame: str | None = None,
+    ) -> list[str]:
         """Top-level virtual folders of the game, used for whole-archive exports."""
         try:
             entries = self.list_files(pak, aes_key, usmap, egame=egame)
@@ -450,10 +453,10 @@ class UexAdapter:
     def _game_for(
         self,
         paks_dir: str,
-        aes_key: Optional[str],
-        usmap: Optional[str] = None,
-        scheme: Optional[str] = None,
-        egame: Optional[str] = None,
+        aes_key: str | None,
+        usmap: str | None = None,
+        scheme: str | None = None,
+        egame: str | None = None,
     ) -> str:
         cached = self._games.get(paks_dir)
         if cached:
@@ -489,6 +492,7 @@ class UexAdapter:
         try:
             footer = pak_footer_version(str(Path(paks_dir) / _probe_pak(paks_dir)))
         except Exception:
+            logger.debug("pak footer version probe failed for %s", paks_dir, exc_info=True)
             pass
         candidates = egame_candidates(paks_dir, footer)
         # A matched driver's EGame is tried first (verified by doctor like any
@@ -528,7 +532,7 @@ class UexAdapter:
             f"{', '.join(candidates)}. Last attempt: {last_error}"
         )
 
-    def _run(self, args: List[str], timeout: int = 600) -> Tuple[str, str, int]:
+    def _run(self, args: list[str], timeout: int = 600) -> tuple[str, str, int]:
         try:
             flags = 0
             if os.name == "nt":
@@ -554,7 +558,7 @@ def _probe_pak(paks_dir: str) -> str:
     return "probe.pak"
 
 
-def _normalize_vpaths(paths: List[str]) -> List[str]:
+def _normalize_vpaths(paths: list[str]) -> list[str]:
     return sorted({path.replace("\\", "/").strip("/") for path in paths if path.strip()})
 
 
@@ -565,13 +569,13 @@ def _mounted_file_count(output: str) -> int:
 
 def _write_config(
     paks_dir: str,
-    aes_key: Optional[str],
+    aes_key: str | None,
     out_dir: str,
-    roots: List[str],
+    roots: list[str],
     game: str,
-    usmap: Optional[str] = None,
-    dynamic_keys: Optional[Dict[str, str]] = None,
-    custom_key: Optional[str] = None,
+    usmap: str | None = None,
+    dynamic_keys: dict[str, str] | None = None,
+    custom_key: str | None = None,
 ) -> Path:
     config = {
         "profiles": {
@@ -597,10 +601,8 @@ def _write_config(
 
 
 def _remove(path: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(path)
-    except OSError:
-        pass
 
 
 __all__ = [

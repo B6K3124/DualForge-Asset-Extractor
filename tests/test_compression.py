@@ -4,7 +4,7 @@ import zlib
 
 import pytest
 
-from dualforge.compression import decompress, is_available, sniff
+from dualforge.compression import CompressionError, decompress, is_available, sniff
 
 PAYLOAD = (b"the quick brown fox jumps over the lazy dog. " * 50) + bytes(range(256))
 
@@ -93,5 +93,5 @@ def test_zip_container():
 
 
 def test_unknown_method_raises():
-    with pytest.raises(Exception):
+    with pytest.raises(CompressionError):
         decompress(PAYLOAD, "not-a-method")

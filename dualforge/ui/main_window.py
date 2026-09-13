@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import threading
 from html import escape
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QByteArray, QThread, QObject, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QByteArray, QTimer, Qt, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,7 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from dualforge.detector import detect
-from dualforge.extract import ExtractCancelled, ExtractOptions, extract_file
+from dualforge.extract import ExtractOptions, extract_file
+from dualforge.log import get_logger
+from dualforge.ui.archive_loaders import bethesda_kind, is_supported_archive, scan_archives
 from dualforge.ui.branding import make_app_icon, make_folder_icon, make_toolbar_icon
 from dualforge.ui.keys_dialog import KeyDialog
 from dualforge.ui.preview import PreviewItem, PreviewPanel
@@ -52,131 +52,11 @@ from dualforge.ui.tree_builder import (
     iter_leaves,
     set_all_checkstates,
 )
+from dualforge.ui.workers import ExtractWorker
 from dualforge.unity import UnityArchive
 from dualforge.unreal import KeyStore, PakArchive, PakError, UnrealBridge
 
-ARCHIVE_SUFFIXES = (".pak", ".utoc", ".ucas", ".unity3d", ".unityweb", ".bundle", ".assets", ".assetbundle", ".archive", ".bsa", ".ba2")
-
-_BETHESDA_KINDS = {
-    ".dds": "texture",
-    ".png": "texture",
-    ".jpg": "texture",
-    ".jpeg": "texture",
-    ".tga": "texture",
-    ".bmp": "texture",
-    ".nif": "mesh",
-    ".wav": "audio",
-    ".fuz": "audio",
-    ".xwm": "audio",
-    ".mp3": "audio",
-    ".ogg": "audio",
-    ".txt": "text",
-    ".json": "text",
-    ".xml": "text",
-    ".csv": "text",
-    ".hlsl": "text",
-    ".fx": "text",
-    ".hkx": "anim",
-    ".kf": "anim",
-    ".bto": "terrain",
-    ".btr": "terrain",
-}
-
-
-def _bethesda_kind(name: str) -> str:
-    return _BETHESDA_KINDS.get(Path(name).suffix.lower(), "file")
-
-
-class WorkerSignals(QObject):
-    progress = Signal(int, int, str)
-    finished = Signal(int, list, list)
-    cancelled = Signal()
-    failed = Signal(str)
-
-
-class ExtractWorker(QThread):
-    def __init__(
-        self,
-        paths: List[str],
-        out_dir: str,
-        aes_key: Optional[str],
-        types: Optional[List[str]],
-        files_by_archive: Dict[str, Optional[List[str]]],
-        formats: Optional[dict],
-        usmap: Optional[str] = None,
-    ):
-        super().__init__()
-        self.paths = paths
-        self.out_dir = out_dir
-        self.aes_key = aes_key
-        self.types = types
-        self.files_by_archive = files_by_archive
-        self.formats = formats
-        self.usmap = usmap
-        self._signals = WorkerSignals()
-        self.progress = self._signals.progress
-        self.finished = self._signals.finished
-        self.cancelled = self._signals.cancelled
-        self.failed = self._signals.failed
-        self._cancel_event = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancel_event.set()
-
-    def run(self) -> None:
-        extracted: List[str] = []
-        errors: List[str] = []
-        total = sum(len(files) for files in self.files_by_archive.values() if files)
-        done = 0
-        cancelled = False
-        for path in self.paths:
-            files = self.files_by_archive.get(path)
-            options = ExtractOptions(
-                out_dir=self.out_dir,
-                aes_key=self.aes_key,
-                type_filter=tuple(self.types) if self.types else None,
-                files=files,
-                formats=self.formats,
-                usmap=self.usmap,
-                progress=lambda i, t, m, _d=done: self.progress.emit(_d + i, max(total, 1), m),
-                is_cancelled=self._cancel_event.is_set,
-            )
-            try:
-                result = extract_file(path, options)
-            except ExtractCancelled:
-                cancelled = True
-                break
-            except Exception as exc:
-                self.failed.emit(f"{Path(path).name}: {exc}")
-                return
-            else:
-                extracted.extend(result.extracted)
-                errors.extend(result.errors)
-            done += len(files) if files else 1
-        if cancelled:
-            self.cancelled.emit()
-            return
-        self._write_manifest(extracted, errors)
-        self.finished.emit(len(extracted), extracted, errors)
-
-    def _write_manifest(self, extracted: List[str], errors: List[str]) -> None:
-        from datetime import datetime
-
-        manifest = {
-            "tool": "DualForge",
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "out_dir": self.out_dir,
-            "archives": self.paths,
-            "files": extracted,
-            "errors": errors,
-        }
-        try:
-            import json
-
-            target = Path(self.out_dir) / "_dualforge_manifest.json"
-            target.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        except OSError:
-            pass
+logger = get_logger(__name__)
 
 
 def _type_icon(kind: str) -> QIcon:
@@ -208,7 +88,7 @@ _REPLACE_FONT = "Font"
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         super().__init__()
         self.settings = settings or Settings.load()
         self.setWindowTitle("DualForge - Unity & Unreal Asset Extractor")
@@ -216,33 +96,33 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(960, 640)
         self.setWindowIcon(make_app_icon())
 
-        self.current_path: Optional[str] = None
-        self.current_executable: Optional[str] = None
-        self.current_engine: Optional[str] = None
+        self.current_path: str | None = None
+        self.current_executable: str | None = None
+        self.current_engine: str | None = None
         self.current_driver = None
         self._usmap_prompt_done = False
-        self.unity_archive: Optional[UnityArchive] = None
-        self._unity_archives: Dict[str, UnityArchive] = {}
-        self.unity_assets: Dict[Tuple[str, str], object] = {}
-        self._unity_engine_versions: Dict[str, Tuple[str, int]] = {}
-        self.pak_archives: Dict[str, PakArchive] = {}
-        self._cdpr_archives: Dict[str, object] = {}
-        self._bethesda_archives: Dict[str, object] = {}
-        self.unreal_entries: List[str] = []
-        self._tree_builder: Optional[AssetTreeBuilder] = None
+        self.unity_archive: UnityArchive | None = None
+        self._unity_archives: dict[str, UnityArchive] = {}
+        self.unity_assets: dict[tuple[str, str], object] = {}
+        self._unity_engine_versions: dict[str, tuple[str, int]] = {}
+        self.pak_archives: dict[str, PakArchive] = {}
+        self._cdpr_archives: dict[str, object] = {}
+        self._bethesda_archives: dict[str, object] = {}
+        self.unreal_entries: list[str] = []
+        self._tree_builder: AssetTreeBuilder | None = None
         self._folder_mode = False
-        self._open_archives: List[str] = []
-        self.worker: Optional[ExtractWorker] = None
-        self._last_out_dir: Optional[str] = None
-        self._recent_menu: Optional[QMenu] = None
+        self._open_archives: list[str] = []
+        self.worker: ExtractWorker | None = None
+        self._last_out_dir: str | None = None
+        self._recent_menu: QMenu | None = None
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(180)
         self._preview_timer.timeout.connect(self._show_preview)
-        self._progress_bar: Optional[QProgressBar] = None
-        self._cancel_button: Optional[QPushButton] = None
-        self._toolbar_actions: Dict[str, QAction] = {}
-        self._donate_button: Optional[QPushButton] = None
+        self._progress_bar: QProgressBar | None = None
+        self._cancel_button: QPushButton | None = None
+        self._toolbar_actions: dict[str, QAction] = {}
+        self._donate_button: QPushButton | None = None
 
         self.setAcceptDrops(True)
         self._build_ui()
@@ -539,7 +419,7 @@ class MainWindow(QMainWindow):
             or "Click to manage game drivers"
         )
 
-    def _set_engine(self, engine: Optional[str], detail: str = "") -> None:
+    def _set_engine(self, engine: str | None, detail: str = "") -> None:
         colors = {"unity": "#4fae6d", "unreal": "#4f8fd0", "container": "#e0a53c"}
         if engine is None:
             self.engine_badge.setText("No archive")
@@ -627,6 +507,7 @@ class MainWindow(QMainWindow):
             driver = _driver_registry.match(path, engine=detection.engine)
             self._set_driver(driver)
         except Exception:
+            logger.debug("driver match failed for %s", path, exc_info=True)
             pass
         self.log.appendPlainText(detection.summary())
         try:
@@ -650,7 +531,7 @@ class MainWindow(QMainWindow):
             self.log.appendPlainText(f"error: {exc}")
         self._apply_filter()
 
-    def _add_file(self, archive_path: str, path: str, kind: str, size: int, data: dict, root: Optional[QTreeWidgetItem] = None) -> None:
+    def _add_file(self, archive_path: str, path: str, kind: str, size: int, data: dict, root: QTreeWidgetItem | None = None) -> None:
         builder = self._tree_builder
         if builder is None:
             builder = AssetTreeBuilder(self.tree)
@@ -659,7 +540,7 @@ class MainWindow(QMainWindow):
             builder.reset(root)
         builder.add_file(path, kind, size, data, _type_icon(kind))
 
-    def _load_unity(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_unity(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         archive = UnityArchive(path)
         self.unity_archive = archive
         self._unity_archives[path] = archive
@@ -687,7 +568,7 @@ class MainWindow(QMainWindow):
         self.item_count.setText(f"{len(assets)} assets")
         return len(assets)
 
-    def _load_unreal(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_unreal(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         if Path(path).suffix.lower() == ".pak":
             try:
                 return self._load_unreal_native(path, root)
@@ -697,7 +578,7 @@ class MainWindow(QMainWindow):
                 self.log.appendPlainText("pyuepak unavailable; falling back to CLI...")
         return self._load_unreal_bridge(path, root)
 
-    def _load_unreal_native(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_unreal_native(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         archive = PakArchive(
             path,
             aes_key=self.settings.default_aes_key or None,
@@ -729,7 +610,7 @@ class MainWindow(QMainWindow):
         self.item_count.setText(f"{len(entries)} files")
         return len(entries)
 
-    def _load_unreal_bridge(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_unreal_bridge(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         bridge = UnrealBridge()
         if not bridge.available():
             if not self.pak_archives and not self._folder_mode:
@@ -789,7 +670,7 @@ class MainWindow(QMainWindow):
         self.item_count.setText(f"{len(paths)} files")
         return len(paths)
 
-    def _load_cdpr(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_cdpr(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         from dualforge.cdpr import RedArchive, RedError
 
         try:
@@ -822,7 +703,7 @@ class MainWindow(QMainWindow):
         self.item_count.setText(f"{len(entries)} files")
         return len(entries)
 
-    def _load_bethesda(self, path: str, root: Optional[QTreeWidgetItem] = None) -> int:
+    def _load_bethesda(self, path: str, root: QTreeWidgetItem | None = None) -> int:
         from dualforge.bethesda import BethesdaArchive, BethesdaError
 
         try:
@@ -840,8 +721,9 @@ class MainWindow(QMainWindow):
             try:
                 size = archive.size_of(entry)
             except Exception:
+                logger.debug("size lookup failed for %s", entry, exc_info=True)
                 pass
-            kind = _bethesda_kind(entry)
+            kind = bethesda_kind(entry)
             self._add_file(
                 path,
                 entry,
@@ -881,7 +763,7 @@ class MainWindow(QMainWindow):
                 if type_name not in known:
                     self.type_combo.addItem(type_name, type_name)
 
-    def open_folder(self, folder: Optional[str] = None) -> None:
+    def open_folder(self, folder: str | None = None) -> None:
         if folder is None or not isinstance(folder, str):
             folder = QFileDialog.getExistingDirectory(
                 self, "Choose a game folder", self.settings.default_out_dir or ""
@@ -891,15 +773,23 @@ class MainWindow(QMainWindow):
         self._reset_session(folder_mode=True)
         self.current_path = folder
         self._set_engine(None)
-        archives = self._scan_archives(folder)
+        archives = scan_archives(folder)
         if not archives:
             self.preview_panel.show_hero(
                 title="No archives found",
                 hint=f"No supported archives found in {folder}.",
             )
             return
+        self._load_archives(
+            archives,
+            folder,
+            announce=f"scanning {Path(folder).name}: found {len(archives)} archive(s)",
+            none_hint="None of the found archives could be parsed. Check the log.",
+        )
+
+    def _load_archives(self, archives: list[str], folder: str, announce: str, none_hint: str) -> None:
         self.log.clear()
-        self.log.appendPlainText(f"scanning {Path(folder).name}: found {len(archives)} archive(s)")
+        self.log.appendPlainText(announce)
         total = 0
         for path in archives:
             root = QTreeWidgetItem([Path(path).name])
@@ -937,7 +827,7 @@ class MainWindow(QMainWindow):
         if not self._open_archives:
             self.preview_panel.show_hero(
                 title="Could not read archives",
-                hint="None of the found archives could be parsed. Check the log.",
+                hint=none_hint,
             )
         else:
             hint = f"{total} assets in {Path(folder).name}"
@@ -950,27 +840,6 @@ class MainWindow(QMainWindow):
             )
         self._apply_filter()
 
-    def _scan_archives(self, folder: str, depth: int = 4) -> List[str]:
-        found: List[str] = []
-        root = Path(folder)
-        if depth <= 0:
-            return found
-        try:
-            entries = sorted(root.iterdir(), key=lambda p: p.name.lower())
-        except OSError:
-            return found
-        for entry in entries:
-            try:
-                if entry.is_dir():
-                    if entry.name.lower() in {"steamapps", "common", "node_modules", ".git"}:
-                        continue
-                    found.extend(self._scan_archives(str(entry), depth - 1))
-                elif entry.suffix.lower() in ARCHIVE_SUFFIXES:
-                    found.append(str(entry))
-            except OSError:
-                continue
-        return found
-
     def _all_type_names(self) -> set:
         names = set()
         for index in range(self.tree.topLevelItemCount()):
@@ -982,7 +851,7 @@ class MainWindow(QMainWindow):
                         names.add(data["kind"])
         return names
 
-    def _detect_game_in_folder(self, folder: Optional[str]) -> None:
+    def _detect_game_in_folder(self, folder: str | None) -> None:
         from dualforge.ui.executable import find_game_executable, identify_game
 
         exe = find_game_executable(folder) if folder else None
@@ -997,6 +866,7 @@ class MainWindow(QMainWindow):
             try:
                 driver = _driver_registry.match(folder, engine=self.current_engine)
             except Exception:
+                logger.debug("driver match failed for %s", folder, exc_info=True)
                 driver = None
         if driver is not None:
             self._set_driver(driver)
@@ -1009,7 +879,7 @@ class MainWindow(QMainWindow):
         elif driver is None and exe:
             self._set_driver(None)
 
-    def _profile_for_driver(self, driver) -> Optional[dict]:
+    def _profile_for_driver(self, driver) -> dict | None:
         for profile in self.settings.profiles:
             name = (profile.get("name") or "").lower()
             folder = (profile.get("folder") or "").lower()
@@ -1038,7 +908,7 @@ class MainWindow(QMainWindow):
     def _schedule_preview(self) -> None:
         self._preview_timer.start()
 
-    def _current_item_data(self) -> Optional[dict]:
+    def _current_item_data(self) -> dict | None:
         item = self.tree.currentItem()
         if item is None:
             return None
@@ -1284,7 +1154,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Repacked '{Path(path).name}' -> {out_dir}")
         self._last_out_dir = out_dir
 
-    def _extract_dir_for(self, data: dict) -> Optional[str]:
+    def _extract_dir_for(self, data: dict) -> str | None:
         ext_path = data.get("path", "") or ""
         if data.get("kind") == "extracted":
             dir_path = Path(ext_path).parent if ext_path else None
@@ -1322,9 +1192,9 @@ class MainWindow(QMainWindow):
             groups = {self.current_path: None}
         self._start_extract(groups, types=None)
 
-    def _all_groups(self) -> Dict[str, Optional[List[str]]]:
+    def _all_groups(self) -> dict[str, list[str] | None]:
         """Build an (archive -> files) map covering every file in the tree."""
-        groups: Dict[str, Optional[List[str]]] = {}
+        groups: dict[str, list[str] | None] = {}
         for index in range(self.tree.topLevelItemCount()):
             top = self.tree.topLevelItem(index)
             for leaf in iter_leaves(top):
@@ -1340,8 +1210,8 @@ class MainWindow(QMainWindow):
                     groups[archive].append(data.get("path", ""))
         return groups
 
-    def _checked_groups(self) -> Dict[str, List[str]]:
-        groups: Dict[str, List[str]] = {}
+    def _checked_groups(self) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {}
         for index in range(self.tree.topLevelItemCount()):
             top = self.tree.topLevelItem(index)
             for leaf in checked_leaves(top):
@@ -1352,11 +1222,10 @@ class MainWindow(QMainWindow):
                 groups.setdefault(archive, []).append(data.get("path", ""))
         return groups
 
-    def _start_extract(self, groups: Dict[str, Optional[List[str]]], types: Optional[List[str]]) -> None:
+    def _start_extract(self, groups: dict[str, list[str] | None], types: list[str] | None) -> None:
         if not groups:
             return
-        if any(archive.lower().endswith((".utoc", ".ucas")) for archive in groups):
-            if not UnrealBridge().available():
+        if any(archive.lower().endswith((".utoc", ".ucas")) for archive in groups) and not UnrealBridge().available():
                 QMessageBox.warning(
                     self,
                     "DualForge",
@@ -1611,7 +1480,7 @@ class MainWindow(QMainWindow):
             return "pick"
         return "skip"
 
-    def _pick_usmap_file(self) -> Optional[str]:
+    def _pick_usmap_file(self) -> str | None:
         from PySide6.QtWidgets import QFileDialog
 
         start = str(Path.home() / ".dualforge")
@@ -1683,17 +1552,13 @@ class MainWindow(QMainWindow):
             return
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path and Path(path).suffix.lower() in ARCHIVE_SUFFIXES:
+            if path and is_supported_archive(path):
                 event.acceptProposedAction()
                 return
 
     def dropEvent(self, event) -> None:
         urls = event.mimeData().urls()
-        paths = [
-            url.toLocalFile()
-            for url in urls
-            if url.toLocalFile() and Path(url.toLocalFile()).suffix.lower() in ARCHIVE_SUFFIXES
-        ]
+        paths = [url.toLocalFile() for url in urls if url.toLocalFile() and is_supported_archive(url.toLocalFile())]
         if not paths:
             self.log.appendPlainText("dropped non-archive file(s); only game archives are accepted")
             return
@@ -1702,65 +1567,15 @@ class MainWindow(QMainWindow):
         else:
             self.open_folder_from_paths(paths)
 
-    def open_folder_from_paths(self, paths: List[str]) -> None:
+    def open_folder_from_paths(self, paths: list[str]) -> None:
         folder = str(Path(paths[0]).parent)
         self._reset_session(folder_mode=True)
         self.current_path = folder
         self._set_engine(None)
-        self.log.clear()
-        self.log.appendPlainText(
-            f"dropped {len(paths)} archive(s) from {Path(folder).name}"
-        )
         archives = sorted(set(paths), key=str.lower)
-        total = 0
-        for path in archives:
-            root = QTreeWidgetItem([Path(path).name])
-            root.setFlags(
-                root.flags()
-                | Qt.ItemFlag.ItemIsUserCheckable
-                | Qt.ItemFlag.ItemIsAutoTristate
-            )
-            root.setCheckState(0, Qt.CheckState.Unchecked)
-            root.setIcon(0, make_folder_icon())
-            root.setData(0, USER_ROLE, {"folder": True, "archive": path, "path": Path(path).name})
-            self.tree.addTopLevelItem(root)
-            try:
-                detection = detect(path)
-                if detection is None:
-                    self.log.appendPlainText(f"unable to identify: {Path(path).name}")
-                    continue
-                if detection.engine == "unity":
-                    count = self._load_unity(path, root)
-                elif detection.engine == "unreal":
-                    count = self._load_unreal(path, root)
-                elif detection.engine == "cdpr":
-                    count = self._load_cdpr(path, root)
-                elif detection.engine == "bethesda":
-                    count = self._load_bethesda(path, root)
-                else:
-                    self.log.appendPlainText(
-                        f"skipping non-extractable archive: {Path(path).name}"
-                    )
-                    continue
-                total += count
-                self._open_archives.append(path)
-            except Exception as exc:
-                self.log.appendPlainText(f"error loading {Path(path).name}: {exc}")
-        self._collect_types(self._all_type_names())
-        self.item_count.setText(f"{total} assets in {len(archives)} archive(s)")
-        self._detect_game_in_folder(folder)
-        if not self._open_archives:
-            self.preview_panel.show_hero(
-                title="Could not read archives",
-                hint="None of the dropped archives could be parsed. Check the log.",
-            )
-        else:
-            hint = f"{total} assets in {Path(folder).name}"
-            if self.current_executable:
-                hint += f"\nGame executable: {Path(self.current_executable).name}\nTools are ready (Ghidra Key Hunt, Generate USMAP)."
-            self.preview_panel.show_hero(
-                title=f"Loaded {len(self._open_archives)} archive(s)",
-                hint=hint,
-                pixmap=self._hero_pixmap(),
-            )
-        self._apply_filter()
+        self._load_archives(
+            archives,
+            folder,
+            announce=f"dropped {len(archives)} archive(s) from {Path(folder).name}",
+            none_hint="None of the dropped archives could be parsed. Check the log.",
+        )

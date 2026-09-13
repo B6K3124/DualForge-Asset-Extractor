@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from dualforge.export.gltf import write_gltf
+import contextlib
 
 TEXTURE_FORMATS = ("png", "jpg", "bmp", "webp", "tga", "dds", "ktx")
 AUDIO_FORMATS = ("wav", "ogg", "flac", "raw")
@@ -40,11 +40,11 @@ DEFAULT_FORMATS = {
 }
 
 
-def normalize_format(fmt: Optional[str]) -> str:
+def normalize_format(fmt: str | None) -> str:
     return (fmt or "png").lower().lstrip(".")
 
 
-def format_choices(type_name: str) -> Tuple[str, ...]:
+def format_choices(type_name: str) -> tuple[str, ...]:
     if type_name in {"Texture2D", "Sprite"}:
         return TEXTURE_FORMATS
     if type_name == "AudioClip":
@@ -162,9 +162,9 @@ def save_font(asset, path_stem: Path, fmt: str = "ttf") -> str:
 
 
 def _parse_obj_with_uv(data: bytes):
-    positions: List[Tuple[float, float, float]] = []
-    uvs: List[Tuple[float, float]] = []
-    faces_raw: List[List[str]] = []
+    positions: list[tuple[float, float, float]] = []
+    uvs: list[tuple[float, float]] = []
+    faces_raw: list[list[str]] = []
     for line in data.decode("utf-8", "replace").splitlines():
         parts = line.split()
         if not parts:
@@ -184,10 +184,10 @@ def _parse_obj_with_uv(data: bytes):
     if not positions or not faces_raw:
         return [], [], []
     merge_map: dict = {}
-    merged: List[Tuple[int, int]] = []
-    tris: List[Tuple[int, int, int]] = []
+    merged: list[tuple[int, int]] = []
+    tris: list[tuple[int, int, int]] = []
     for face in faces_raw:
-        corners: List[int] = []
+        corners: list[int] = []
         for part in face:
             segments = part.split("/")
             try:
@@ -196,10 +196,8 @@ def _parse_obj_with_uv(data: bytes):
                 continue
             uv_index = -1
             if len(segments) > 1 and segments[1]:
-                try:
+                with contextlib.suppress(ValueError):
                     uv_index = int(segments[1]) - 1
-                except ValueError:
-                    pass
             key = (pos_index, uv_index)
             index = merge_map.get(key)
             if index is None:

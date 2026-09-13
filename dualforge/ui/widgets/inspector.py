@@ -71,10 +71,7 @@ def _extend(item: QTreeWidgetItem, value: Any, visited: tuple, depth: int) -> No
 
 def _item(key: str, value: Any) -> QTreeWidgetItem:
     text = _value_text(value)
-    if _expandable(value):
-        item = QTreeWidgetItem([key, f"{text}..."])
-    else:
-        item = QTreeWidgetItem([key, text])
+    item = QTreeWidgetItem([key, f"{text}..."]) if _expandable(value) else QTreeWidgetItem([key, text])
     if isinstance(value, bool):
         item.setToolTip(1, "bool")
     return item

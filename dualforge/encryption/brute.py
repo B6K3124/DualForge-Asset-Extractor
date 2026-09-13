@@ -9,8 +9,12 @@ committing it.
 from __future__ import annotations
 
 
+from dualforge.constants import PAK_MAGIC
 from dualforge.encryption.pipeline import build_pipeline
 from dualforge.encryption.registry import Context, KeyMaterial
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 # Unreal pak magic at the start of (most) read blocks; after AES these appear
 # as the footer. We detect the encrypted/decrypted markers that reveal a hit.
@@ -55,11 +59,17 @@ def validate_key(
     try:
         decrypted = pipe.apply(block, km, ctx)
     except Exception:
+        logger.debug("validate_key pipeline failed for scheme %r", scheme, exc_info=True)
         return False
     return _looks_decrypted_chunk(decrypted)
 
 
-def brute_force_aes(block: bytes, candidates: list, archive_name: str = "", guid: str = "") -> str | None:
+def brute_force_aes(
+    block: bytes,
+    candidates: list[str],
+    archive_name: str = "",
+    guid: str = "",
+) -> str | None:
     """Try each candidate AES hex key; return the first that validates."""
     for key in candidates:
         if validate_key(block, "aes-256", key, archive_name, guid):
@@ -67,13 +77,13 @@ def brute_force_aes(block: bytes, candidates: list, archive_name: str = "", guid
     return None
 
 
-def _blocks_with_tail_marker(region: bytes, count: int) -> list:
+def _blocks_with_tail_marker(region: bytes, count: int) -> list[bytes]:
     """Gather aligned 16-byte blocks whose tail equals the AES-encrypted magic.
 
     Encrypted Unreal index blocks carry the magic ``0x5E865DF5`` (bytes
     ``F5 5D 86 5E``) at offset 12 whether or not the pak footer is standard.
     """
-    blocks: list = []
+    blocks: list[bytes] = []
     for off in range(0, len(region) - 16, 16):
         blk = region[off : off + 16]
         if blk[12:16] == b"\xF5\x5D\x86\x5E":
@@ -83,7 +93,7 @@ def _blocks_with_tail_marker(region: bytes, count: int) -> list:
     return blocks
 
 
-def probe_pak_blocks(raw: bytes, count: int = 16) -> list:
+def probe_pak_blocks(raw: bytes, count: int = 16) -> list[bytes]:
     """Extract up to ``count`` 16-byte-aligned encrypted index candidate blocks.
 
     Walks backward from the pak footer magic, collecting aligned blocks whose
@@ -95,12 +105,11 @@ def probe_pak_blocks(raw: bytes, count: int = 16) -> list:
     for the encrypted-magic marker, so a key found via static/runtime analysis
     can still be validated.
     """
-    paK_magic = 0x5A6F12E1
     size = len(raw)
-    blocks: list = []
+    blocks: list[bytes] = []
     pos = size
     while pos >= 0 and len(blocks) < count:
-        end = raw.rfind(paK_magic.to_bytes(4, "little"), 0, pos)
+        end = raw.rfind(PAK_MAGIC.to_bytes(4, "little"), 0, pos)
         if end < 0:
             break
         pos = end

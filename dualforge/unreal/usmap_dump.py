@@ -3,7 +3,11 @@ from __future__ import annotations
 import ctypes
 import struct
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from collections.abc import Callable
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 # Windows-only: dumps the global FNamePool of a running UE5 game process and
 # produces a CUE4Parse usmap whose name table matches the game's name pool.
@@ -41,13 +45,13 @@ class UsmapDumpError(Exception):
 
 @dataclass
 class FNamePool:
-    names: List[str] = field(default_factory=list)
+    names: list[str] = field(default_factory=list)
     pool_base: int = 0
     block0_base: int = 0
     block_count: int = 0
 
 
-def list_game_processes() -> List[Tuple[int, str]]:
+def list_game_processes() -> list[tuple[int, str]]:
     """Return [(pid, exe)] for running processes (Windows only)."""
     _check_windows()
     from ctypes import wintypes
@@ -74,7 +78,7 @@ def list_game_processes() -> List[Tuple[int, str]]:
         entry.dwSize = ctypes.sizeof(ProcessEntry32)
         if not ctypes.windll.kernel32.Process32FirstW(handle, ctypes.byref(entry)):
             raise UsmapDumpError("Process32FirstW failed")
-        result: List[Tuple[int, str]] = []
+        result: list[tuple[int, str]] = []
         while True:
             if entry.th32ProcessID > 0:
                 result.append((entry.th32ProcessID, entry.szExeFile))
@@ -85,7 +89,7 @@ def list_game_processes() -> List[Tuple[int, str]]:
         ctypes.windll.kernel32.CloseHandle(handle)
 
 
-def find_process(name: str) -> Tuple[int, str]:
+def find_process(name: str) -> tuple[int, str]:
     """Find a process by executable name (case-insensitive, .exe optional)."""
     wanted = name.lower()
     if not wanted.endswith(".exe"):
@@ -169,7 +173,7 @@ class _ProcessReader:
                 yield int(info.BaseAddress or 0), int(info.RegionSize)
             address = int(info.BaseAddress or 0) + int(info.RegionSize)
 
-    def region(self, address: int) -> Tuple[int, int]:
+    def region(self, address: int) -> tuple[int, int]:
         """Return (base, size) of the mapped region containing address."""
         info = self._memory_basic_info()
         if self._kernel32.VirtualQueryEx(
@@ -178,9 +182,9 @@ class _ProcessReader:
             raise UsmapDumpError(f"VirtualQueryEx failed at 0x{address:X}")
         return int(info.BaseAddress or 0), int(info.RegionSize)
 
-    def scan(self, pattern: bytes) -> List[int]:
+    def scan(self, pattern: bytes) -> list[int]:
         """Find all occurrences of pattern in readable memory."""
-        hits: List[int] = []
+        hits: list[int] = []
         for base, size in self.readable_regions():
             if size < len(pattern):
                 continue
@@ -203,7 +207,7 @@ class _ProcessReader:
         return hits
 
 
-def _parse_entry(block: bytes, offset: int, layout: str) -> Optional[Tuple[str, int]]:
+def _parse_entry(block: bytes, offset: int, layout: str) -> tuple[str, int] | None:
     """Parse one FNameEntry at offset; returns (name, next_offset) or None."""
     if offset + 2 > len(block):
         return None
@@ -224,10 +228,7 @@ def _parse_entry(block: bytes, offset: int, layout: str) -> Optional[Tuple[str, 
     if offset + size > len(block):
         return None
     raw = block[offset:offset + size]
-    if wide:
-        name = raw.decode("utf-16-le", errors="replace")
-    else:
-        name = raw.decode("utf-8", errors="replace")
+    name = raw.decode("utf-16-le", errors="replace") if wide else raw.decode("utf-8", errors="replace")
     if name.endswith("\x00"):
         name = name[:-1]
     next_offset = offset + size
@@ -236,7 +237,7 @@ def _parse_entry(block: bytes, offset: int, layout: str) -> Optional[Tuple[str, 
     return name, next_offset
 
 
-def _detect_layout(block: bytes) -> Optional[str]:
+def _detect_layout(block: bytes) -> str | None:
     """Identify the header bit layout from the canonical first names."""
     expected = ("None", "ByteProperty", "IntProperty", "BoolProperty")
     for layout in (_LAYOUT_PACKED, _LAYOUT_MSB, _LAYOUT_LSB):
@@ -253,7 +254,7 @@ def _detect_layout(block: bytes) -> Optional[str]:
     return None
 
 
-def _walk_block(block: bytes, names: List[str], layout: str) -> int:
+def _walk_block(block: bytes, names: list[str], layout: str) -> int:
     """Walk FNameEntry records inside one 64 KB block; returns entry count."""
     offset = 0
     count = 0
@@ -283,6 +284,7 @@ def _walk_pool_table(
         try:
             block = read_block(pool_base + offset)
         except Exception:
+            logger.debug("fname pool block at offset %d unreadable", pool_base + offset, exc_info=True)
             continue
         count = _walk_block(block, pool.names, layout)
         if count == 0:
@@ -342,7 +344,7 @@ def _scan_packed_pool(reader: _ProcessReader, block0_base: int) -> FNamePool:
     return pool
 
 
-def usmap_from_names(names: List[str]):
+def usmap_from_names(names: list[str]):
     """Build a CUE4Parse UsmapMappings whose name table is the dumped pool."""
     from dualforge.unreal.usmap import UsmapMappings
 

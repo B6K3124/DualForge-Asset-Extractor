@@ -15,7 +15,7 @@ next to the layer and referenced with an ``inputs:file`` asset path.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 _DEFAULT_SCENE = "World"
 
@@ -41,8 +41,8 @@ def _prim_name(name: object) -> str:
 
 def write_usd_world(
     path: str,
-    meshes: Sequence[Dict[str, object]],
-    textures: Optional[Sequence[Dict[str, object]]] = None,
+    meshes: Sequence[dict[str, object]],
+    textures: Sequence[dict[str, object]] | None = None,
     scene_name: str = _DEFAULT_SCENE,
     up_axis: str = "Y",
     meters_per_unit: float = 1.0,
@@ -73,7 +73,7 @@ def write_usd_world(
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    texture_files: Dict[str, str] = {}
+    texture_files: dict[str, str] = {}
     if textures:
         texture_dir = out.parent / "textures"
         texture_dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +87,7 @@ def write_usd_world(
             texture_files[_prim_name(texture.get("name", "tex"))] = f"textures/{file_name}"
 
     axis = "Y" if str(up_axis).upper() == "Y" else "Z"
-    lines: List[str] = ["#usda 1.0", "(", f"    metersPerUnit = {meters_per_unit:g}", f'    upAxis = "{axis}"', ")", ""]
+    lines: list[str] = ["#usda 1.0", "(", f"    metersPerUnit = {meters_per_unit:g}", f'    upAxis = "{axis}"', ")", ""]
     scene = _prim_name(scene_name)
     lines.append(f'def Xform "{scene}" (')
     lines.append('    kind = "assembly"')
@@ -129,7 +129,7 @@ def write_usd_world(
     return str(out)
 
 
-def _texture_file_for(mesh: Dict[str, object], texture_files: Dict[str, str]) -> Optional[str]:
+def _texture_file_for(mesh: dict[str, object], texture_files: dict[str, str]) -> str | None:
     explicit = mesh.get("texture_file")
     if explicit:
         return str(explicit)
@@ -139,13 +139,13 @@ def _texture_file_for(mesh: Dict[str, object], texture_files: Dict[str, str]) ->
     return None
 
 
-def _write_mesh_body(lines: List[str], mesh: Dict[str, object]) -> None:
-    normals: List = list(mesh.get("normals") or [])
-    uvs: List = list(mesh.get("uvs") or [])
-    triangles: List = list(mesh["triangles"])
-    vertices: List = list(mesh["vertices"])
+def _write_mesh_body(lines: list[str], mesh: dict[str, object]) -> None:
+    normals: list = list(mesh.get("normals") or [])
+    uvs: list = list(mesh.get("uvs") or [])
+    triangles: list = list(mesh["triangles"])
+    vertices: list = list(mesh["vertices"])
     if normals:
-        lines.append("            float3[] normals = %s (" % _point_list(normals))
+        lines.append(f"            float3[] normals = {_point_list(normals)} (")
         lines.append('                interpolation = "vertex"')
         lines.append("            )")
     lines.append(f"            float3[] points = {_point_list(vertices)}")
@@ -153,12 +153,12 @@ def _write_mesh_body(lines: List[str], mesh: Dict[str, object]) -> None:
     indices = ", ".join(str(int(idx)) for tri in triangles for idx in tri)
     lines.append(f"            int[] faceVertexIndices = [{indices}]")
     if uvs:
-        lines.append("            float2[] primvars:st = %s (" % _point_list(uvs))
+        lines.append(f"            float2[] primvars:st = {_point_list(uvs)} (")
         lines.append('                interpolation = "vertex"')
         lines.append("            )")
 
 
-def _write_material_template(lines: List[str], scene: str, xform: str, mesh_name: str, texture_file: str) -> None:
+def _write_material_template(lines: list[str], scene: str, xform: str, mesh_name: str, texture_file: str) -> None:
     material = f"{scene}/{xform}/Material_{mesh_name}"
     surface = f"{material}/surfaceShader.outputs:surface"
     diffuse = f"{material}/diffuseTexture.outputs:rgb"
@@ -188,7 +188,7 @@ def write_usd_mesh(
     name: str,
     vertices: Sequence[Sequence[float]],
     triangles: Sequence[Sequence[int]],
-    uvs: Optional[Sequence[Sequence[float]]] = None,
+    uvs: Sequence[Sequence[float]] | None = None,
 ) -> str:
     return write_usd_world(
         path,

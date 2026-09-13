@@ -4,10 +4,15 @@ glTF/OBJ by the exporters."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Iterator, Sequence
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
-def _vec3(value: Any) -> Optional[List[float]]:
+def _vec3(value: Any) -> list[float] | None:
     if value is None:
         return None
     x = getattr(value, "x", None)
@@ -18,14 +23,14 @@ def _vec3(value: Any) -> Optional[List[float]]:
     return [float(x), float(y), float(z)]
 
 
-def _vec4(value: Any) -> Optional[List[float]]:
+def _vec4(value: Any) -> list[float] | None:
     parts = _vec3(value)
     if parts is None:
         return None
     return parts + [float(getattr(value, "w", 0.0))]
 
 
-def skin_data(mesh: Any) -> Optional[Tuple[List[List[int]], List[List[float]]]]:
+def skin_data(mesh: Any) -> tuple[list[list[int]], list[list[float]]] | None:
     """Return per-vertex (joint_indices, weights) pairs from ``m_Skin``.
 
     Handles both the older ``BoneWeights4`` and newer ``BoneInfluence`` layouts
@@ -34,8 +39,8 @@ def skin_data(mesh: Any) -> Optional[Tuple[List[List[int]], List[List[float]]]]:
     skin = getattr(mesh, "m_Skin", None)
     if not skin:
         return None
-    joints: List[List[int]] = []
-    weights: List[List[float]] = []
+    joints: list[list[int]] = []
+    weights: list[list[float]] = []
     for entry in skin:
         js = []
         ws = []
@@ -53,19 +58,19 @@ def skin_data(mesh: Any) -> Optional[Tuple[List[List[int]], List[List[float]]]]:
     return joints, weights
 
 
-def bind_poses(mesh: Any) -> Optional[List[List[float]]]:
+def bind_poses(mesh: Any) -> list[list[float]] | None:
     """Return row-major 4x4 bind-pose matrices (one per bone)."""
     poses = getattr(mesh, "m_BindPose", None)
     if not poses:
         return None
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for matrix in poses:
         row = [getattr(matrix, f"e{r}{c}", 0.0) for r in range(4) for c in range(4)]
         out.append([float(v) for v in row])
     return out
 
 
-def joint_positions(bind_poses: Sequence[Sequence[float]]) -> List[List[float]]:
+def joint_positions(bind_poses: Sequence[Sequence[float]]) -> list[list[float]]:
     """Translation component of each bind matrix.
 
     A Unity Matrix4x4 stores the translation in the right column, so for a
@@ -77,7 +82,7 @@ def joint_positions(bind_poses: Sequence[Sequence[float]]) -> List[List[float]]:
     ]
 
 
-def blend_shapes(mesh: Any, vertex_count: int) -> List[Dict[str, Any]]:
+def blend_shapes(mesh: Any, vertex_count: int) -> list[dict[str, Any]]:
     """Return morph targets as ``{"name", "positions", "normals"}`` deltas.
 
     Each delta array is parallel to the exported vertex list (dense), zeros
@@ -104,20 +109,20 @@ def blend_shapes(mesh: Any, vertex_count: int) -> List[Dict[str, Any]]:
     else:
         source_vertices = []
 
-    def fields(entry: Any) -> Tuple[Optional[int], Optional[List[float]], Optional[List[float]]]:
+    def fields(entry: Any) -> tuple[int | None, list[float] | None, list[float] | None]:
         index = getattr(entry, "index", None)
         vertex = _vec3(getattr(entry, "vertex", None)) or _vec3(getattr(entry, "position", None))
         normal = _vec3(getattr(entry, "normal", None))
         return index, vertex, normal
 
-    records: List[Tuple[int, Optional[List[float]], Optional[List[float]]]] = []
+    records: list[tuple[int, list[float] | None, list[float] | None]] = []
     for entry in source_vertices:
         index, vertex, normal = fields(entry)
         if index is None:
             continue
         records.append((int(index), vertex, normal))
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for shape in shapes:
         name = str(getattr(shape, "name", None) or getattr(shape, "m_Name", "") or "Shape")
         first_vertex = int(getattr(shape, "firstVertex", 0) or 0)
@@ -145,7 +150,7 @@ def blend_shapes(mesh: Any, vertex_count: int) -> List[Dict[str, Any]]:
 
 def find_skinned_mesh_renderer(
     readers: Iterator[Any], mesh_reader: Any
-) -> Optional[Any]:
+) -> Any | None:
     """Return the first SkinnedMeshRenderer whose m_Mesh points at mesh_reader."""
     target_path_id = getattr(mesh_reader, "path_id", None)
     seen = 0
@@ -153,6 +158,7 @@ def find_skinned_mesh_renderer(
         try:
             type_name = reader.type.name
         except Exception:
+            logger.debug("skinned mesh renderer scan skipped an unreadable object", exc_info=True)
             continue
         if type_name != "SkinnedMeshRenderer":
             continue
@@ -162,6 +168,7 @@ def find_skinned_mesh_renderer(
         try:
             obj = reader.read()
         except Exception:
+            logger.debug("skinned mesh renderer object could not be read", exc_info=True)
             continue
         mesh_ptr = getattr(obj, "m_Mesh", None)
         if mesh_ptr is None:
@@ -171,7 +178,7 @@ def find_skinned_mesh_renderer(
     return None
 
 
-def _read_object(assets_file: Any, ptr: Any) -> Optional[Any]:
+def _read_object(assets_file: Any, ptr: Any) -> Any | None:
     """Best-effort resolve a PPtr to a typed read object."""
     if ptr is None or getattr(ptr, "path_id", None) is None:
         return None
@@ -181,10 +188,11 @@ def _read_object(assets_file: Any, ptr: Any) -> Optional[Any]:
             return None
         return reader.read()
     except Exception:
+        logger.debug("could not read PPtr path_id %s", ptr.path_id, exc_info=True)
         return None
 
 
-def bone_hierarchy(smr: Any, assets_file: Any) -> Tuple[List[str], List[int]]:
+def bone_hierarchy(smr: Any, assets_file: Any) -> tuple[list[str], list[int]]:
     """Resolve SkinnedMeshRenderer bone names + parent indices.
 
     Returns (bone_names, bone_parents) where ``bone_parents[i]`` is -1 for the
@@ -199,8 +207,8 @@ def bone_hierarchy(smr: Any, assets_file: Any) -> Tuple[List[str], List[int]]:
     root_ptr = getattr(smr, "m_RootBone", None)
     root_path = getattr(root_ptr, "path_id", None) if root_ptr is not None else None
 
-    name_by_slot: Dict[int, str] = {}
-    transform_paths: Dict[int, int] = {}
+    name_by_slot: dict[int, str] = {}
+    transform_paths: dict[int, int] = {}
     for slot, ptr in enumerate(bones):
         transform = _read_object(assets_file, ptr)
         if transform is None:
@@ -213,8 +221,8 @@ def bone_hierarchy(smr: Any, assets_file: Any) -> Tuple[List[str], List[int]]:
         name_by_slot[slot] = name
         transform_paths[slot] = getattr(ptr, "path_id", None)
 
-    names: List[str] = []
-    parents: List[int] = []
+    names: list[str] = []
+    parents: list[int] = []
     reverse_lookup = {path: slot for slot, path in transform_paths.items()}
     for slot in range(bone_count):
         ptr = bones[slot]
@@ -242,11 +250,11 @@ class AnimationTrackError(Exception):
     pass
 
 
-def _curve_keyframes(curve: Any) -> List[Tuple[float, Any]]:
+def _curve_keyframes(curve: Any) -> list[tuple[float, Any]]:
     items = getattr(curve, "m_Curve", None) or getattr(curve, "curve", None)
     if not items:
         return []
-    frames: List[Tuple[float, Any]] = []
+    frames: list[tuple[float, Any]] = []
     for keyframe in items:
         time = getattr(keyframe, "time", None)
         value = getattr(keyframe, "value", None)
@@ -261,14 +269,14 @@ def _path_leaf(path: str) -> str:
     return leaf.replace(" (1)", "").strip()
 
 
-def animation_tracks(clip: Any) -> Dict[str, Dict[str, List[Tuple[float, List[float]]]]]:
+def animation_tracks(clip: Any) -> dict[str, dict[str, list[tuple[float, list[float]]]]]:
     """Convert an AnimationClip to node TRS tracks for glTF.
 
     Returns ``{bone_name: {"translation"|"rotation"|"scale": [(t, values)]}}``
     using the per-component m_PositionCurves / m_RotationCurves /
     m_ScaleCurves UnityPy exposes.
     """
-    tracks: Dict[str, Dict[str, List[Tuple[float, List[float]]]]] = {}
+    tracks: dict[str, dict[str, list[tuple[float, list[float]]]]] = {}
 
     def add_curves(curves: Any, target: str, width: int, is_rotation: bool = False) -> None:
         for curve_entry in curves or []:
@@ -277,7 +285,7 @@ def animation_tracks(clip: Any) -> Dict[str, Dict[str, List[Tuple[float, List[fl
             if not name:
                 continue
             frames = _curve_keyframes(getattr(curve_entry, "curve", None))
-            keys: List[Tuple[float, List[float]]] = []
+            keys: list[tuple[float, list[float]]] = []
             for time, value in frames:
                 values = _vec4(value) if is_rotation else _vec3(value)
                 if values is None or len(values) != width:
@@ -314,8 +322,8 @@ def animation_tracks(clip: Any) -> Dict[str, Dict[str, List[Tuple[float, List[fl
     return tracks
 
 
-def _any_track(tracks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
+def _any_track(tracks: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
     for _, target_data in tracks.items():
         for target, keys in target_data.items():
             if keys:
@@ -323,14 +331,14 @@ def _any_track(tracks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return result
 
 
-def _normalize_quat(values: List[float]) -> List[float]:
+def _normalize_quat(values: list[float]) -> list[float]:
     import math
 
     length = math.sqrt(sum(v * v for v in values)) or 1.0
     return [v / length for v in values]
 
 
-def _euler_to_quat(euler: Sequence[float]) -> List[float]:
+def _euler_to_quat(euler: Sequence[float]) -> list[float]:
     """Convert Unity ZXY euler degrees to a quaternion (x, y, z, w)."""
     import math
 
@@ -346,7 +354,7 @@ def _euler_to_quat(euler: Sequence[float]) -> List[float]:
     ]
 
 
-def clip_summary(clip: Any) -> Dict[str, Any]:
+def clip_summary(clip: Any) -> dict[str, Any]:
     """Small metadata dict shown in the preview details pane."""
     position_frames = 0
     rotation_frames = 0

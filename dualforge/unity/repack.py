@@ -12,10 +12,9 @@ output directory; never overwrite the source file in place.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from dualforge.export.texture import load_image
-from dualforge.unity.unity_module import UnityError
+from dualforge.unity import UnityError
 
 _BACKEND_PACKS = ("none", "lz4", "lz4hc")
 
@@ -24,7 +23,7 @@ def replace_texture(
     archive,
     asset,
     image_path: str,
-    target_format: Optional[int] = None,
+    target_format: int | None = None,
     mipmap_count: int = 1,
 ) -> str:
     """Replace a Texture2D's pixels with the decoded ``image_path``."""
@@ -38,8 +37,8 @@ def replace_texture(
     image = _as_rgba(load_image(image_path))
     try:
         obj.set_image(image, target_format=target_format, mipmap_count=mipmap_count)
-    except AttributeError:
-        raise UnityError("this Unity object does not support in-place image replacement")
+    except AttributeError as exc:
+        raise UnityError("this Unity object does not support in-place image replacement") from exc
     except Exception as exc:
         raise UnityError(f"texture replacement failed: {exc}") from exc
     _mark_changed(asset)

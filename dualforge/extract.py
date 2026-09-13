@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from collections.abc import Callable
 
 from dualforge.compression import CompressionError, decompress
 from dualforge.detector import Detection, detect, detect_header
 from dualforge.export import Exporter
+from dualforge.log import get_logger
 from dualforge.unity import UnityArchive, UnityError
 from dualforge.unreal import PakError, UnrealBridge, UnrealError
+
+logger = get_logger(__name__)
 
 Progress = Callable[[int, int, str], None]
 Cancel = Callable[[], bool]
@@ -19,9 +22,9 @@ class ExtractCancelled(Exception):
 
 @dataclass
 class ExtractResult:
-    detected: Optional[Detection] = None
-    extracted: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    detected: Detection | None = None
+    extracted: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     skipped: int = 0
 
     @property
@@ -32,18 +35,18 @@ class ExtractResult:
 @dataclass
 class ExtractOptions:
     out_dir: str
-    aes_key: Optional[str] = None
-    engine: Optional[str] = None
-    type_filter: Optional[Tuple[str, ...]] = None
-    files: Optional[List[str]] = None
-    formats: Optional[dict] = None
-    usmap: Optional[str] = None
-    driver: Optional[object] = None
-    scheme: Optional[str] = None
-    scheme_params: Optional[dict] = None
-    egame: Optional[str] = None
-    progress: Optional[Progress] = None
-    is_cancelled: Optional[Cancel] = None
+    aes_key: str | None = None
+    engine: str | None = None
+    type_filter: tuple[str, ...] | None = None
+    files: list[str] | None = None
+    formats: dict | None = None
+    usmap: str | None = None
+    driver: object | None = None
+    scheme: str | None = None
+    scheme_params: dict | None = None
+    egame: str | None = None
+    progress: Progress | None = None
+    is_cancelled: Cancel | None = None
 
 
 def extract_file(path: str, options: ExtractOptions) -> ExtractResult:
@@ -129,7 +132,7 @@ def _extract_unity(path: str, detection: Detection, options: ExtractOptions, res
                 key = entry.aes_key
                 scheme = options.scheme or entry.scheme or "aes-256"
         except Exception:
-            pass
+            logger.debug("key-store lookup failed for %s", path, exc_info=True)
     if key:
         archive.set_decrypt_key(key, scheme=scheme)
     assets = [a for a in archive.assets()]
@@ -158,6 +161,7 @@ def _find_usmap_hint(path: str) -> str:
         usmap = find_usmap(path)
         return usmap or ""
     except Exception:
+        logger.debug("no usmap hint found for %s", path, exc_info=True)
         return ""
 
 
@@ -179,6 +183,7 @@ def _chunk_key_hint(path: str) -> str:
 
         version = pak_footer_version(path)
     except Exception:
+        logger.debug("footer version read failed for %s", path, exc_info=True)
         return ""
     if version is not None and version >= 13:
         return (
@@ -229,7 +234,7 @@ def _extract_unreal_bridge(path: str, options: ExtractOptions, result: ExtractRe
                 dynamic_keys = entry.dynamic_keys or None
                 scheme = options.scheme or (entry.scheme if entry.scheme not in ("", "aes-256") else None)
         except Exception:
-            pass
+            logger.debug("key-store lookup failed for %s", path, exc_info=True)
     entries = bridge.list_files(
         path, aes_key=options.aes_key, usmap=usmap,
         dynamic_keys=dynamic_keys, scheme=scheme, egame=options.egame,

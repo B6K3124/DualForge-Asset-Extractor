@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from collections.abc import Iterator
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class UnityError(Exception):
@@ -42,7 +46,7 @@ class UnityArchive:
 
         loaded = 0
         directory = Path(self.path).parent
-        candidates: List[Path] = []
+        candidates: list[Path] = []
         try:
             for file in self.env.files.values():
                 for external in getattr(file, "externals", []) or []:
@@ -54,7 +58,7 @@ class UnityArchive:
                     if ref and Path(ref).name:
                         candidates.append(directory / Path(ref).name)
         except Exception:
-            pass
+            logger.debug("could not read external stream refs for %s", self.path, exc_info=True)
         stem = Path(self.path).stem
         try:
             for pattern in (
@@ -82,6 +86,7 @@ class UnityArchive:
                 self.env.load_file(str(candidate), is_dependency=True)
                 loaded += 1
             except Exception:
+                logger.debug("could not load sibling stream %s", candidate, exc_info=True)
                 continue
         return loaded
 
@@ -148,7 +153,7 @@ class UnityArchive:
         except (AttributeError, TypeError, ValueError) as exc:
             raise UnityError(f"could not set decrypt key: {exc}") from exc
 
-    def world_meshes(self) -> Iterator[Dict[str, object]]:
+    def world_meshes(self) -> Iterator[dict[str, object]]:
         """Yield crude mesh data for every readable Mesh in the archive.
 
         Each item carries ``name`` / ``vertices`` / ``triangles`` / ``uvs``
@@ -175,9 +180,10 @@ class UnityArchive:
                     "uvs": [tuple(uv) for uv in (handler.m_UV0 or [])],
                 }
             except Exception:
+                logger.debug("mesh %s could not be decoded for world export", asset.path, exc_info=True)
                 continue
 
-    def world_textures(self) -> Iterator[Dict[str, object]]:
+    def world_textures(self) -> Iterator[dict[str, object]]:
         """Yield PNG payloads for every readable Texture2D in the archive."""
         import io
 
@@ -187,6 +193,7 @@ class UnityArchive:
             try:
                 image = asset._reader.read().image
             except Exception:
+                logger.debug("texture %s could not be decoded", asset.path, exc_info=True)
                 continue
             if image is None:
                 continue
@@ -194,6 +201,7 @@ class UnityArchive:
             try:
                 image.save(buffer, format="PNG")
             except Exception:
+                logger.debug("texture %s could not be encoded to PNG", asset.path, exc_info=True)
                 continue
             yield {"name": str(Path(asset.path).name), "pixels": buffer.getvalue()}
 
@@ -208,6 +216,7 @@ class UnityArchive:
             container = self.env.container.items()
             first = next(container, None)
         except Exception:
+            logger.debug("no container view on %s; using flat object list", self.path, exc_info=True)
             first = None
         if first is not None:
             for path, value in chain((first,), container):
@@ -231,9 +240,9 @@ class UnityArchive:
         self,
         asset: UnityAsset,
         out_dir: str,
-        fmt: Optional[str] = None,
-        formats: Optional[Dict[str, str]] = None,
-    ) -> List[str]:
+        fmt: str | None = None,
+        formats: dict[str, str] | None = None,
+    ) -> list[str]:
         from dualforge.export.convert import (
             DEFAULT_FORMATS,
             save_font,
@@ -243,7 +252,7 @@ class UnityArchive:
             save_texture,
         )
 
-        written: List[str] = []
+        written: list[str] = []
         obj = asset._reader.read()
         type_name = asset.type_name
         chosen = fmt or (formats or {}).get(type_name) or DEFAULT_FORMATS.get(type_name, "bin")
@@ -359,6 +368,7 @@ def _export_mesh(obj, out_dir: str, asset_path: str, fmt: str, scope=None, mesh_
                 reader=mesh_reader,
             )
         except Exception:
+            logger.warning("skinning failed for %r; exporting plain glTF", name, exc_info=True)
             # skinning is optional; degrade to a plain glTF on any problem
             data = _mesh_to_obj(name, verts, tris, uvs)
             return save_mesh(name or "mesh", data, stem, "gltf")
@@ -405,6 +415,7 @@ def _export_skinned_gltf(obj, stem, name, verts, tris, uvs, scope=None, reader=N
         try:
             assets_file = reader.assets_file
         except Exception:
+            logger.debug("no assets_file on reader; skipping bone hierarchy", exc_info=True)
             assets_file = None
     if assets_file is not None and scope is not None:
         try:
@@ -414,6 +425,7 @@ def _export_skinned_gltf(obj, stem, name, verts, tris, uvs, scope=None, reader=N
         except UnityError:
             raise
         except Exception:
+            logger.debug("bone hierarchy lookup failed; using fallback names", exc_info=True)
             bone_names, bone_parents = [], []
     if not bone_names:
         bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
@@ -469,6 +481,7 @@ def _export_skinned_fbx(obj, stem, name, verts, tris, uvs, scope=None, reader=No
         try:
             assets_file = reader.assets_file
         except Exception:
+            logger.debug("no assets_file on reader; skipping bone hierarchy", exc_info=True)
             assets_file = None
     if assets_file is not None and scope is not None:
         try:
@@ -478,6 +491,7 @@ def _export_skinned_fbx(obj, stem, name, verts, tris, uvs, scope=None, reader=No
         except UnityError:
             raise
         except Exception:
+            logger.debug("bone hierarchy lookup failed; using fallback names", exc_info=True)
             bone_names, bone_parents = [], []
     if not bone_names:
         bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
@@ -522,10 +536,11 @@ def _assets_file(reader) -> object:
     try:
         return reader.assets_file
     except Exception:
+        logger.debug("no assets_file available on reader", exc_info=True)
         return None
 
 
-def _export_cubemap(obj, out_dir: str, asset_path: str, fmt: str) -> List[str]:
+def _export_cubemap(obj, out_dir: str, asset_path: str, fmt: str) -> list[str]:
     from dualforge.export.convert import save_texture
     from dualforge.export.unity_extra import cubemap_faces
 
@@ -533,7 +548,7 @@ def _export_cubemap(obj, out_dir: str, asset_path: str, fmt: str) -> List[str]:
     faces = cubemap_faces(obj)
     if not faces:
         raise UnityError(f"cubemap has no decodable faces: {asset_path}")
-    written: List[str] = []
+    written: list[str] = []
     if len(faces) == 1:
         written.append(save_texture(faces[0], stem, fmt))
         return written
@@ -574,14 +589,14 @@ def _export_video(obj, out_dir: str, asset_path: str, fmt: str, archive_path: st
     return _write_bytes(stem.with_suffix(suffix), data)
 
 
-def _export_sprite_atlas(obj, out_dir: str, asset_path: str, fmt: str, assets_file) -> List[str]:
+def _export_sprite_atlas(obj, out_dir: str, asset_path: str, fmt: str, assets_file) -> list[str]:
     from dualforge.export.convert import save_texture
     from dualforge.export.unity_extra import sprite_atlas_entries
 
     entries = sprite_atlas_entries(obj, assets_file) if assets_file is not None else []
     if not entries:
         raise UnityError(f"sprite atlas has no resolvable sprites: {asset_path}")
-    written: List[str] = []
+    written: list[str] = []
     for name, image in entries:
         entry_stem = _output_stem(out_dir, asset_path, name=name)
         written.append(save_texture(image, entry_stem, fmt))
@@ -627,7 +642,7 @@ def _export_animation(obj, out_dir: str, asset_path: str, fmt: str) -> str:
     fmt = str(fmt).lower().lstrip(".")
     name = str(getattr(obj, "m_Name", "") or Path(asset_path).name) or "clip"
     if fmt == "json":
-        summary: Dict[str, object] = {"name": name}
+        summary: dict[str, object] = {"name": name}
         tracks = animation_tracks(obj)
         summary["tracks"] = {
             node: {

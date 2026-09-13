@@ -1,3 +1,3 @@
-from dualforge.unity.unity_module import UnityArchive, UnityAsset, UnityError
+from dualforge.unity.archive import UnityArchive, UnityAsset, UnityError
 
 __all__ = ["UnityArchive", "UnityAsset", "UnityError"]

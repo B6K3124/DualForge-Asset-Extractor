@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
 
 DRIVER_VERSION = "1.0"
 DRIVER_FILE_SUFFIX = ".dualforge-driver.json"
@@ -29,12 +28,12 @@ class GameDriver:
     engine: str = "auto"  # "unity" | "unreal" | "bethesda" | "cdpr" | "auto"
 
     # ── detection ─────────────────────────────────────────────────────
-    game_fragments: List[str] = field(default_factory=list)
-    archive_patterns: List[str] = field(default_factory=list)
+    game_fragments: list[str] = field(default_factory=list)
+    archive_patterns: list[str] = field(default_factory=list)
 
     # ── encryption ────────────────────────────────────────────────────
     encryption_scheme: str = "aes-256"
-    encryption_params: Dict[str, str] = field(default_factory=dict)
+    encryption_params: dict[str, str] = field(default_factory=dict)
 
     # ── unreal-specific ───────────────────────────────────────────────
     egame: str = ""
@@ -44,26 +43,26 @@ class GameDriver:
     unity_cn: bool = False
 
     # ── export defaults ───────────────────────────────────────────────
-    export_formats: Dict[str, str] = field(default_factory=dict)
-    asset_filter: List[str] = field(default_factory=list)
+    export_formats: dict[str, str] = field(default_factory=dict)
+    asset_filter: list[str] = field(default_factory=list)
 
     # ── CLI hints ─────────────────────────────────────────────────────
-    cli_args: Dict[str, str] = field(default_factory=dict)
+    cli_args: dict[str, str] = field(default_factory=dict)
 
     # ── metadata ──────────────────────────────────────────────────────
     author: str = ""
     notes: str = ""
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
     # ── serialization ─────────────────────────────────────────────────
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         data = asdict(self)
         data[DRIVER_MAGIC] = DRIVER_VERSION
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> GameDriver:
+    def from_dict(cls, data: dict[str, object]) -> GameDriver:
         known = {f.name for f in cls.__dataclass_fields__.values()}
         kwargs = {}
         for key, value in data.items():
@@ -83,7 +82,7 @@ class GameDriver:
 
         return cls.from_dict(json.loads(text))
 
-    def save(self, path: Optional[str] = None) -> str:
+    def save(self, path: str | None = None) -> str:
         """Write this driver to a JSON file. Returns the written path."""
         if path is None:
             from dualforge.drivers.registry import default_drivers_dir
@@ -118,21 +117,14 @@ class GameDriver:
                 if fnmatch(basename, pattern):
                     score += 50.0
                     break
-        if self.engine != "auto":
-            if self.engine == "unreal" and any(
-                text.endswith(ext) for ext in (".pak", ".utoc", ".ucas")
-            ):
-                score += 10.0
-            elif self.engine == "unity" and any(
-                text.endswith(ext) for ext in (".unity3d", ".bundle", ".assetbundle", ".assets")
-            ):
-                score += 10.0
-            elif self.engine == "bethesda" and any(
-                text.endswith(ext) for ext in (".bsa", ".ba2")
-            ):
-                score += 10.0
-            elif self.engine == "cdpr" and text.endswith(".archive"):
-                score += 10.0
+        if self.engine != "auto" and (self.engine == "unreal" and any(
+            text.endswith(ext) for ext in (".pak", ".utoc", ".ucas")
+        ) or self.engine == "unity" and any(
+            text.endswith(ext) for ext in (".unity3d", ".bundle", ".assetbundle", ".assets")
+        ) or self.engine == "bethesda" and any(
+            text.endswith(ext) for ext in (".bsa", ".ba2")
+        ) or self.engine == "cdpr" and text.endswith(".archive")):
+            score += 10.0
         return score
 
 

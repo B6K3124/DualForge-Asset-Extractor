@@ -104,7 +104,7 @@ def test_save_text(tmp_path: Path):
 
 
 def test_mesh_to_obj_with_uvs():
-    from dualforge.unity.unity_module import _mesh_to_obj
+    from dualforge.unity.archive import _mesh_to_obj
 
     obj = _mesh_to_obj(
         "quad",
@@ -119,7 +119,7 @@ def test_mesh_to_obj_with_uvs():
 
 
 def test_mesh_to_obj_without_uvs():
-    from dualforge.unity.unity_module import _mesh_to_obj
+    from dualforge.unity.archive import _mesh_to_obj
 
     obj = _mesh_to_obj("tri", [(0, 0, 0), (1, 0, 0), (0, 1, 0)], [[(0, 1, 2)]], []).decode("utf-8")
     assert "vt" not in obj
@@ -127,7 +127,7 @@ def test_mesh_to_obj_without_uvs():
 
 
 def test_mesh_to_obj_multi_component_uvs():
-    from dualforge.unity.unity_module import _mesh_to_obj
+    from dualforge.unity.archive import _mesh_to_obj
 
     obj = _mesh_to_obj(
         "m",

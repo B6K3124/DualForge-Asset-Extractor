@@ -17,7 +17,6 @@ raise a descriptive error rather than producing garbage.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -31,7 +30,7 @@ _DDPF_RGB = 0x40
 _DDPF_RGBA = 0x41
 _DDPF_LUMINANCE = 0x20000
 
-_FOURCC_FORMATS: Dict[bytes, str] = {
+_FOURCC_FORMATS: dict[bytes, str] = {
     b"DXT1": "bc1",
     b"DXT2": "bc2",
     b"DXT3": "bc2",
@@ -43,7 +42,7 @@ _FOURCC_FORMATS: Dict[bytes, str] = {
     b"BC5U": "bc5",
 }
 
-_DXGI_FORMATS: Dict[int, str] = {
+_DXGI_FORMATS: dict[int, str] = {
     71: "bc1",  # BC1_UNORM
     74: "bc2",  # BC2_UNORM
     77: "bc3",  # BC3_UNORM
@@ -53,7 +52,7 @@ _DXGI_FORMATS: Dict[int, str] = {
     87: "bgra8",  # B8G8R8A8_UNORM
 }
 
-_KTX_COMPRESSED: Dict[int, str] = {
+_KTX_COMPRESSED: dict[int, str] = {
     0x83F1: "bc1",  # GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
     0x83F4: "bc2",  # GL_COMPRESSED_RGBA_S3TC_DXT3_EXT
     0x83F5: "bc3",  # GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
@@ -61,7 +60,7 @@ _KTX_COMPRESSED: Dict[int, str] = {
     0x8DBD: "bc5",  # GL_COMPRESSED_RG_RGTC2
 }
 
-_KTX_UNCOMPRESSED: Dict[int, str] = {
+_KTX_UNCOMPRESSED: dict[int, str] = {
     0x1903: "red",  # GL_RED
     0x1907: "rgb",
     0x1908: "rgba",
@@ -80,7 +79,7 @@ _KTX_UNCOMPRESSED: Dict[int, str] = {
     0x822C: "rgba8",
 }
 
-_VK_FORMATS: Dict[int, str] = {
+_VK_FORMATS: dict[int, str] = {
     131: "bc1",  # VK_FORMAT_BC1_RGBA_UNORM_BLOCK
     132: "bc2",  # VK_FORMAT_BC2_UNORM_BLOCK
     133: "bc3",  # VK_FORMAT_BC3_UNORM_BLOCK
@@ -134,7 +133,7 @@ def _expand565(v) -> np.ndarray:
     ).astype(np.uint8)
 
 
-def _expand5551(v) -> Tuple[np.ndarray, np.ndarray]:
+def _expand5551(v) -> tuple[np.ndarray, np.ndarray]:
     r = (v >> 11) & 0x1F
     g = (v >> 6) & 0x1F
     b = (v >> 1) & 0x1F
@@ -146,7 +145,7 @@ def _expand5551(v) -> Tuple[np.ndarray, np.ndarray]:
     return rgb, (a * 255).astype(np.uint8)
 
 
-def _expand4444(v) -> Tuple[np.ndarray, np.ndarray]:
+def _expand4444(v) -> tuple[np.ndarray, np.ndarray]:
     rgb = np.stack(
         [((v >> 12) & 0xF) * 17, ((v >> 8) & 0xF) * 17, ((v >> 4) & 0xF) * 17],
         axis=-1,
@@ -286,7 +285,7 @@ def _decode_blocks(fmt: str, data: bytes, width: int, height: int) -> np.ndarray
 # Uncompressed decoding (mask-driven for DDS, layout-driven for KTX).
 
 
-def _channel_from_mask(words: np.ndarray, mask: int) -> Optional[np.ndarray]:
+def _channel_from_mask(words: np.ndarray, mask: int) -> np.ndarray | None:
     if mask == 0:
         return None
     shift = (mask & -mask).bit_length() - 1
@@ -295,10 +294,7 @@ def _channel_from_mask(words: np.ndarray, mask: int) -> Optional[np.ndarray]:
     if nbits < 8:
         shift_left = 8 - nbits
         fill = 2 * nbits - 8
-        if fill > 0:
-            v = (v << shift_left) | (v >> fill)
-        else:
-            v = v << shift_left
+        v = v << shift_left | v >> fill if fill > 0 else v << shift_left
     elif nbits > 8:
         v = v >> (nbits - 8)
     return v.astype(np.uint8)
@@ -324,7 +320,7 @@ def _decode_uncompressed(
     if bpp == 3:
         raw = np.frombuffer(px, dtype=np.uint8).reshape(height, width, 3)
         channels = [mask_channel_index(m) for m in (rmask, gmask, bmask)]
-        for dst, ch in zip((0, 1, 2), channels):
+        for dst, ch in zip((0, 1, 2), channels, strict=True):
             out[..., dst] = raw[..., ch] if ch is not None else 0
         out[..., 3] = 255
         return out
@@ -358,7 +354,7 @@ def _decode_uncompressed(
     return out
 
 
-def mask_channel_index(mask: int) -> Optional[int]:
+def mask_channel_index(mask: int) -> int | None:
     """Map a 24-bit channel mask to the byte index it occupies (BGR style)."""
     if mask == 0:
         return None
@@ -366,7 +362,7 @@ def mask_channel_index(mask: int) -> Optional[int]:
     return 2 - shift // 8
 
 
-_KTX_ROW_BPP: Dict[str, int] = {
+_KTX_ROW_BPP: dict[str, int] = {
     "rgba": 4,
     "rgba8": 4,
     "srgb8_alpha8": 4,
@@ -467,7 +463,7 @@ def decode_dds(data: bytes):
     bmask = _u32(data, 100)
     amask = _u32(data, 104)
     offset = 128
-    fmt: Optional[str] = None
+    fmt: str | None = None
     luminance = bool(pf_flags & _DDPF_LUMINANCE)
     if fourcc == b"DX10":
         if len(data) < 148:

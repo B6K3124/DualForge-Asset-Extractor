@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import math
-from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QPointF, Qt
@@ -17,6 +16,10 @@ from PySide6.QtOpenGL import (
 )
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 try:
     QSurfaceFormat()
@@ -59,6 +62,7 @@ def gl_context_available() -> bool:
             context.doneCurrent()
         return ok
     except Exception:
+        logger.debug("no usable OpenGL 3.3 context available", exc_info=True)
         return False
 
 
@@ -108,7 +112,7 @@ void main() {
 _BACKGROUND = QColor("#15161b")
 
 
-def _texture_to_rgba(data: bytes) -> Optional[np.ndarray]:
+def _texture_to_rgba(data: bytes) -> np.ndarray | None:
     """Decode image bytes to a float32 ``(H,W,4)`` RGBA array (0..255)."""
     try:
         from PIL import Image
@@ -116,6 +120,7 @@ def _texture_to_rgba(data: bytes) -> Optional[np.ndarray]:
         with Image.open(io.BytesIO(data)) as image:
             array = np.asarray(image.convert("RGBA"), dtype=np.float32)
     except Exception:
+        logger.debug("texture bytes could not be decoded as an image", exc_info=True)
         return None
     if array.size == 0:
         return None
@@ -191,13 +196,13 @@ class MeshViewBase(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._verts: Optional[np.ndarray] = None
-        self._normals: Optional[np.ndarray] = None
-        self._tris: Optional[np.ndarray] = None
-        self._edges: Optional[np.ndarray] = None
-        self._uv: Optional[np.ndarray] = None
-        self._texture: Optional[bytes] = None
-        self._texture_rgba: Optional[np.ndarray] = None
+        self._verts: np.ndarray | None = None
+        self._normals: np.ndarray | None = None
+        self._tris: np.ndarray | None = None
+        self._edges: np.ndarray | None = None
+        self._uv: np.ndarray | None = None
+        self._texture: bytes | None = None
+        self._texture_rgba: np.ndarray | None = None
         self._center = np.zeros(3, dtype=np.float32)
         self._radius = 1.0
         self._yaw = -0.6
@@ -210,9 +215,9 @@ class MeshViewBase(QWidget):
         self._solid_color = QColor("#e88b3a")
         self._edge_color = QColor("#17181d")
         self._bone_color = QColor("#4fae6d")
-        self._joint_data: Optional[np.ndarray] = None
-        self._bone_edges: Optional[np.ndarray] = None
-        self._joint_dots: Optional[np.ndarray] = None
+        self._joint_data: np.ndarray | None = None
+        self._bone_edges: np.ndarray | None = None
+        self._joint_dots: np.ndarray | None = None
 
     # ---- mesh data ----
 
@@ -243,8 +248,8 @@ class MeshViewBase(QWidget):
         normals: np.ndarray,
         tris: np.ndarray,
         edges: np.ndarray,
-        uv: Optional[np.ndarray] = None,
-        texture: Optional[bytes] = None,
+        uv: np.ndarray | None = None,
+        texture: bytes | None = None,
     ) -> None:
         self._verts = np.ascontiguousarray(verts, dtype=np.float32)
         self._normals = np.ascontiguousarray(normals, dtype=np.float32)
@@ -344,17 +349,17 @@ class MeshView(QOpenGLWidget):
         fmt.setSamples(4)
         fmt.setDepthBufferSize(24)
         self.setFormat(fmt)
-        self._gl: Optional[QOpenGLFunctions_3_3_Core] = None
-        self._program: Optional[QOpenGLShaderProgram] = None
-        self._vao: Optional[QOpenGLVertexArrayObject] = None
+        self._gl: QOpenGLFunctions_3_3_Core | None = None
+        self._program: QOpenGLShaderProgram | None = None
+        self._vao: QOpenGLVertexArrayObject | None = None
         self._dirty = True
-        self._verts: Optional[np.ndarray] = None
-        self._normals: Optional[np.ndarray] = None
-        self._tris: Optional[np.ndarray] = None
-        self._edges: Optional[np.ndarray] = None
-        self._uv: Optional[np.ndarray] = None
-        self._texture: Optional[bytes] = None
-        self._gl_texture: Optional[QOpenGLTexture] = None
+        self._verts: np.ndarray | None = None
+        self._normals: np.ndarray | None = None
+        self._tris: np.ndarray | None = None
+        self._edges: np.ndarray | None = None
+        self._uv: np.ndarray | None = None
+        self._texture: bytes | None = None
+        self._gl_texture: QOpenGLTexture | None = None
         self._center = np.zeros(3, dtype=np.float32)
         self._radius = 1.0
         self._yaw = -0.6
@@ -367,14 +372,14 @@ class MeshView(QOpenGLWidget):
         self._solid_color = QColor("#e88b3a")
         self._edge_color = QColor("#17181d")
         self._bone_color = QColor("#4fae6d")
-        self._joint_data: Optional[np.ndarray] = None
-        self._bone_edges: Optional[np.ndarray] = None
-        self._joint_dots: Optional[np.ndarray] = None
+        self._joint_data: np.ndarray | None = None
+        self._bone_edges: np.ndarray | None = None
+        self._joint_dots: np.ndarray | None = None
         self._bone_line_count = 0
-        self._vbo: Optional[QOpenGLBuffer] = None
-        self._vbo_edges: Optional[QOpenGLBuffer] = None
-        self._vbo_bones: Optional[QOpenGLBuffer] = None
-        self._ebo_tris: Optional[QOpenGLBuffer] = None
+        self._vbo: QOpenGLBuffer | None = None
+        self._vbo_edges: QOpenGLBuffer | None = None
+        self._vbo_bones: QOpenGLBuffer | None = None
+        self._ebo_tris: QOpenGLBuffer | None = None
 
     def set_bones(self, bones) -> None:
         self._joint_data = None
@@ -403,8 +408,8 @@ class MeshView(QOpenGLWidget):
         normals: np.ndarray,
         tris: np.ndarray,
         edges: np.ndarray,
-        uv: Optional[np.ndarray] = None,
-        texture: Optional[bytes] = None,
+        uv: np.ndarray | None = None,
+        texture: bytes | None = None,
     ) -> None:
         self._verts = np.ascontiguousarray(verts, dtype=np.float32)
         self._normals = np.ascontiguousarray(normals, dtype=np.float32)
@@ -683,7 +688,7 @@ class SoftwareMeshView(MeshViewBase):
             light /= np.linalg.norm(light)
             base = self._solid_color
 
-            for _z, (i0, i1, i2), (a, b, c), normal in rows:
+            for _z, (_i0, _i1, _i2), (a, b, c), normal in rows:
                 diffuse = float(max(np.dot(normal, light), 0.15))
                 color = QColor(
                     min(255, round(base.red() * diffuse)),

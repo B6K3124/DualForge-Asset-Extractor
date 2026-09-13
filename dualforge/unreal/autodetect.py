@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 # Well-known UE / Tencent game executable name fragments, in rough priority.
 _EXE_HINTS = (
@@ -86,9 +85,9 @@ def find_install_root(archive_or_folder: str) -> Path:
     return p.parent
 
 
-def _candidate_exes(root: Path, max_depth: int = _MAX_DEPTH) -> List[Path]:
+def _candidate_exes(root: Path, max_depth: int = _MAX_DEPTH) -> list[Path]:
     """All .exe files under ``root`` (skipping ignored dirs like Windows/System32)."""
-    results: List[Path] = []
+    results: list[Path] = []
     for pattern in _IS_EXE:
         for exe in root.rglob(pattern):
             depth = len(exe.relative_to(root).parts)
@@ -154,7 +153,7 @@ def _score_exe(exe: Path, root: Path) -> float:
     return score
 
 
-def find_game_executable(archive_or_folder: str) -> Tuple[Optional[str], List[Tuple[str, float]]]:
+def find_game_executable(archive_or_folder: str) -> tuple[str | None, list[tuple[str, float]]]:
     """Locate the game's main executable under an install root.
 
     Returns ``(best_path, ranked_candidates)`` where candidates are
@@ -164,7 +163,7 @@ def find_game_executable(archive_or_folder: str) -> Tuple[Optional[str], List[Tu
     root = find_install_root(archive_or_folder)
     if not root.is_dir():
         return None, []
-    ranked: List[Tuple[str, float]] = []
+    ranked: list[tuple[str, float]] = []
     for exe in _candidate_exes(root):
         score = _score_exe(exe, root)
         if score < 0:

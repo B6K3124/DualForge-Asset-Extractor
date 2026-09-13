@@ -28,9 +28,12 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Tuple
+from collections.abc import Iterator
 
 from dualforge.compression import CompressionError, decompress
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 BSA_MAGIC = b"BSA\x00"
 BA2_MAGIC = b"BTD\x00"
@@ -91,7 +94,7 @@ class _BA2Texture:
     format: int
     is_cubemap: bool
     tile: int
-    chunks: List[Dict[str, int]] = field(default_factory=list)
+    chunks: list[dict[str, int]] = field(default_factory=list)
 
 
 def _read_uvarint(data: bytes, pos: int) -> tuple:
@@ -180,7 +183,7 @@ class BethesdaArchive:
         if records_end > len(data):
             raise BethesdaError("BSA folder records out of range")
 
-        folders: List[Dict[str, int]] = []
+        folders: list[dict[str, int]] = []
         for i in range(folder_count):
             pos = folder_offset + i * dir_size
             if self.version >= 105:
@@ -200,7 +203,7 @@ class BethesdaArchive:
         if dirs_named:
             names_region = folder_names_len + folder_count
         file_names_offset = records_end + names_region + file_count * 16
-        file_names: List[str] = []
+        file_names: list[str] = []
         if files_named:
             if file_names_offset > len(data):
                 raise BethesdaError("BSA file name table out of range")
@@ -216,7 +219,7 @@ class BethesdaArchive:
         # followed by 16-byte file records (hash, size+flags, data offset). The
         # stored folder offset points past the file-name block, so the real
         # content offset subtracts total_file_name_length.
-        files: List[_BSAFile] = []
+        files: list[_BSAFile] = []
         idx = 0
         for folder in folders:
             content_pos = folder["offset"] - file_names_len
@@ -241,10 +244,7 @@ class BethesdaArchive:
                 content_pos += 16
                 size = size_flags & FILE_SIZE_MASK
                 bit_compressed = bool(size_flags & FILE_COMPRESSED_MASK)
-                if arch_compressed:
-                    compressed = not bit_compressed
-                else:
-                    compressed = bit_compressed
+                compressed = not bit_compressed if arch_compressed else bit_compressed
                 fname = file_names[idx] if idx < len(file_names) else ""
                 idx += 1
                 files.append(
@@ -320,7 +320,7 @@ class BethesdaArchive:
             folder_blocks.append(records)
 
         # Embedded file names are stored directly after folder blocks.
-        file_names: List[str] = []
+        file_names: list[str] = []
         if files_named:
             for _ in range(file_count):
                 length, pos = _read_uvarint(data, pos)
@@ -333,7 +333,7 @@ class BethesdaArchive:
         # Each file record carries its folder path; the individual filename
         # lives in the file_names table, paired by global file index. Rebuild
         # the full path as folder/filename.
-        files: List[_BSAFile] = []
+        files: list[_BSAFile] = []
         idx = 0
         for records in folder_blocks:
             for (folder, offset, size, compressed, _h) in records:
@@ -353,6 +353,7 @@ class BethesdaArchive:
         try:
             text = raw.decode("utf-8", "replace")
         except Exception:
+            logger.debug("utf-8 decode of BSA name failed; using latin-1", exc_info=True)
             text = raw.decode("latin-1", "replace")
         text = text.strip("\x00\r\n")
         return text
@@ -384,7 +385,7 @@ class BethesdaArchive:
 
     def _names_at(
         self, data: bytes, name_off: int, count: int, width: int
-    ) -> List[str]:
+    ) -> list[str]:
         pos = name_off
         names = []
         for _ in range(count):
@@ -410,7 +411,7 @@ class BethesdaArchive:
             raise BethesdaError("BA2 file entries out of range")
 
         names = self._names_at(data, name_off, file_count, 0)
-        entries: List[_BA2File] = []
+        entries: list[_BA2File] = []
         pos = entry_base
         for i in range(file_count):
             name_hash, ext, dir_hash, flags, offset = struct.unpack_from(
@@ -438,10 +439,9 @@ class BethesdaArchive:
         if len(data) < entry_base:
             raise BethesdaError("BA2 header truncated")
         names = self._names_at(data, name_off, file_count, 2)
-        entries: List[_BA2Texture] = []
+        entries: list[_BA2Texture] = []
         pos = entry_base
-        idx = 0
-        for i in range(file_count):
+        for _i in range(file_count):
             if pos + 24 > len(data):
                 raise BethesdaError("BA2 texture entry out of range")
             name_hash, ext, dir_hash, unk, n_chunks, chunk_hdr_size, height, \
@@ -472,8 +472,7 @@ class BethesdaArchive:
                     }
                 )
 
-            name = names[idx] if idx < len(names) else ""
-            idx += 1
+            name = names[_i] if _i < len(names) else ""
             entries.append(
                 _BA2Texture(
                     path=self._join("", name),
@@ -547,7 +546,7 @@ class BethesdaArchive:
         except CompressionError as exc:
             raise BethesdaError(f"cannot decompress {f.path}: {exc}") from exc
 
-    def _bsa_payload(self, path: str, raw: bytes) -> Tuple[int, bytes]:
+    def _bsa_payload(self, path: str, raw: bytes) -> tuple[int, bytes]:
         """Split a compressed BSA block into (uncompressed size, payload).
 
         Streaming-layout texture archives (v104/105 with ``FLAG_FILES_NAMED``)
@@ -573,12 +572,7 @@ class BethesdaArchive:
         raw = self._slice(f.offset, size)
         if not f.compressed:
             return raw
-        try:
-            return decompress(raw, "zlib", output_size=f.unpacked_size)
-        except CompressionError as exc:
-            raise BethesdaError(f"cannot decompress {f.path}: {exc}") from exc
-        except Exception as exc:
-            raise BethesdaError(f"cannot decompress {f.path}: {exc}") from exc
+        return self._zlib_decompress(raw, f.unpacked_size, f.path)
 
     def _read_ba2_texture(self, t: _BA2Texture) -> bytes:
         header = build_dds(t.width, t.height, t.mips, t.format, t.is_cubemap)
@@ -591,23 +585,26 @@ class BethesdaArchive:
             )
             raw = self._slice(chunk["offset"], size)
             if chunk["packed_size"]:
-                try:
-                    raw = decompress(raw, "zlib", output_size=chunk["unpacked_size"])
-                except Exception as exc:
-                    raise BethesdaError(f"cannot decompress {t.path}: {exc}") from exc
+                raw = self._zlib_decompress(raw, chunk["unpacked_size"], t.path)
             chunks.append(raw)
         return header + b"".join(chunks)
 
+    def _zlib_decompress(self, raw: bytes, unpacked_size: int, label: str) -> bytes:
+        """Decompress a zlib BA2 payload, wrapping failures as BethesdaError."""
+        try:
+            return decompress(raw, "zlib", output_size=unpacked_size)
+        except Exception as exc:
+            raise BethesdaError(f"cannot decompress {label}: {exc}") from exc
+
     def extract_file(self, name: str, out_dir: str) -> str:
         """Extract a single entry to ``out_dir`` preserving its relative path."""
-        from dualforge.export import Exporter
+        from dualforge.export.exporter import write_entry
 
-        data = self.open_file(name)
-        exporter = Exporter(out_dir)
-        return exporter.write(name, data)
+        return write_entry(out_dir, name, self.open_file(name))
 
-    def extract_all(self, out_dir: str, progress=None) -> List[str]:
-        """Extract every entry into ``out_dir``. Returns written paths."""
+    def extract_all(self, out_dir: str, progress=None) -> list[str]:
+        """Extract every entry into ``out_dir``. Returns written paths; a
+        single unreadable entry is logged and skipped so the run continues."""
         from dualforge.export import Exporter
 
         exporter = Exporter(out_dir)
@@ -619,7 +616,8 @@ class BethesdaArchive:
             try:
                 data = self.open_file(name)
             except BethesdaError as exc:
-                raise BethesdaError(exc) from exc
+                logger.warning("skipping %s: %s", name, exc)
+                continue
             written.append(exporter.write(name, data))
         return written
 

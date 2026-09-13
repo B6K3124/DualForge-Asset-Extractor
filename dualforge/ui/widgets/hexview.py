@@ -72,7 +72,7 @@ class HexView(QAbstractScrollArea):
             painter.setPen(QPen(OFFSET_COLOR, 1))
             painter.drawText(QPointF(left, y), f"{offset:08x}")
             x_hex = left + offset_width + 28
-            for index, byte in enumerate(chunk):
+            for _index, byte in enumerate(chunk):
                 painter.setPen(QPen(HEX_COLOR if byte != 0 else DIM_CHAR, 1))
                 painter.drawText(QPointF(x_hex, y), f"{byte:02x}")
                 x_hex += self._hex_chars

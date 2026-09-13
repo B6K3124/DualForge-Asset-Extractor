@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import (
@@ -154,7 +154,7 @@ def _draw_donate(painter: QPainter, s: float, color: str) -> None:
 _draw_folder = _draw_open
 
 
-_ICON_PAINTERS: Dict[str, _IconPainter] = {
+_ICON_PAINTERS: dict[str, _IconPainter] = {
     "open": _draw_open,
     "folder": _draw_folder,
     "extract": _draw_extract,

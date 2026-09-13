@@ -9,6 +9,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
+
 
 class KeyDialog(QDialog):
     def __init__(self, parent=None, scheme: str = "aes-256"):
@@ -54,6 +58,7 @@ class KeyDialog(QDialog):
             extra = [p.name for p in PRESETS if p.name not in names]
             ordered = sorted(names + extra, key=lambda s: (s != "aes-256", s.lower()))
         except Exception:
+            logger.debug("scheme list unavailable; falling back to aes-256", exc_info=True)
             ordered = ["aes-256"]
         self.scheme_combo.addItems(ordered or ["aes-256"])
         index = ordered.index(selected) if selected in ordered else 0

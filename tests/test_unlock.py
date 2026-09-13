@@ -315,7 +315,7 @@ def test_import_mapping_merges_dynamic_keys(store_path: str):
 
 
 def test_load_sibling_streams_registers_resS(tmp_path: Path, monkeypatch):
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     (tmp_path / "CAB-1a2b.resS").write_bytes(b"\x00stream")
     (tmp_path / "main.assets").write_bytes(b"fake")
@@ -338,7 +338,7 @@ def test_load_sibling_streams_registers_resS(tmp_path: Path, monkeypatch):
 
 
 def test_load_sibling_streams_no_crash_when_missing(tmp_path: Path):
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     class FakeEnv:
         files = {}

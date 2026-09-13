@@ -4,7 +4,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 
 class VgmstreamError(Exception):
@@ -12,7 +11,7 @@ class VgmstreamError(Exception):
 
 
 class Vgmstream:
-    def __init__(self, exe_path: Optional[str] = None, search_paths: Optional[List[str]] = None):
+    def __init__(self, exe_path: str | None = None, search_paths: list[str] | None = None):
         self.exe_path = exe_path or _find_exe(search_paths)
 
     def available(self) -> bool:
@@ -51,7 +50,7 @@ class Vgmstream:
         return str(out)
 
 
-def _find_exe(search_paths: Optional[List[str]]) -> Optional[str]:
+def _find_exe(search_paths: list[str] | None) -> str | None:
     env = os.environ.get("DUALFORGE_VGMSTREAM")
     if env and Path(env).is_file():
         return env

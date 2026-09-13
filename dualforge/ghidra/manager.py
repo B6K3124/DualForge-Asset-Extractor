@@ -19,7 +19,11 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
+
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 # Version we prefer to download when the user does not supply one.
 DEFAULT_GHIDRA_RELEASE = "Ghidra_11.3.2_build"
@@ -48,7 +52,7 @@ def _log(message: str) -> None:
 # ------------------------------------------------------------------ discovery
 
 
-def find_analyze_headless() -> Optional[Path]:
+def find_analyze_headless() -> Path | None:
     """Locate an existing ``analyzeHeadless`` (env, cache, common roots, PATH).
 
     Mirrors (and extends) ``scripts/ghidra/ghidra_key_finder.find_analyze_headless``
@@ -95,7 +99,7 @@ def find_analyze_headless() -> Optional[Path]:
     return None
 
 
-def find_java() -> Optional[str]:
+def find_java() -> str | None:
     """Locate a usable JRE/JDK (21 preferred; any Java accepted by caller)."""
     if os.environ.get("JAVA_HOME"):
         candidate = Path(os.environ["JAVA_HOME"]) / "bin" / ("java.exe" if os.name == "nt" else "java")
@@ -112,13 +116,14 @@ def find_java() -> Optional[str]:
     return None
 
 
-def _java_major(path: str) -> Optional[int]:
+def _java_major(path: str) -> int | None:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         completed = subprocess.run(
             [path, "-version"], capture_output=True, text=True, timeout=30, creationflags=flags
         )
     except Exception:
+        logger.debug("could not probe java %s", path, exc_info=True)
         return None
     import re
 
@@ -134,18 +139,67 @@ def _java_major(path: str) -> Optional[int]:
 # --------------------------------------------------------------- provisioning
 
 
-def _latest_ghidra_asset(log: Callable[[str], None]) -> Tuple[str, str]:
-    """Return (zip_name, zip_url) for the latest stable Ghidra PUBLIC build."""
+def _latest_ghidra_asset(log: Callable[[str], None]) -> tuple[str, str, str]:
+    """Return (zip_name, zip_url, sha256_hex) for the latest stable Ghidra PUBLIC build.
+
+    ``sha256_hex`` is "" when GitHub provides no digest for the asset.
+    """
     import json as _json
 
     req = urllib.request.Request(GHIDRA_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "DualForge"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         payload = _json.load(resp)
+
+    def _sha256_of(asset: dict) -> str:
+        digest = asset.get("digest") or ""
+        if isinstance(digest, str) and digest.startswith("sha256:"):
+            return digest[len("sha256:"):].strip()
+        sibling = f"{asset.get('name', '')}.sha256"
+        for candidate in payload.get("assets", []):
+            if candidate.get("name") == sibling:
+                text = _fetch_sha256_file(candidate.get("browser_download_url", ""))
+                hex_part = text.split()[0] if text else ""
+                return hex_part if len(hex_part) == 64 else ""
+        return ""
+
     for asset in payload.get("assets", []):
         name = asset.get("name", "")
         if name.startswith("ghidra_") and "PUBLIC" in name and name.endswith(".zip"):
-            return name, asset.get("browser_download_url", "")
+            return name, asset.get("browser_download_url", ""), _sha256_of(asset)
     raise GhidraError(f"no PUBLIC zip found in latest Ghidra release ({payload.get('tag_name')})")
+
+
+def _fetch_sha256_file(url: str) -> str:
+    """Download a ``foo.zip.sha256`` companion file and return its text."""
+    if not url:
+        return ""
+    req = urllib.request.Request(url, headers={"User-Agent": "DualForge"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode("utf-8", "replace").strip()
+
+
+def _sha256_hex(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _verify_sha256(path: Path, expected: str, label: str, log: Callable[[str], None]) -> None:
+    """Confirm a downloaded file matches its expected SHA-256 or self-heal."""
+    log(f"verifying {label} (SHA-256)")
+    actual = _sha256_hex(path)
+    if actual.lower() == expected.lower():
+        log(f"  {label}: hash OK")
+        return
+    path.unlink(missing_ok=True)
+    raise GhidraError(
+        f"SHA-256 mismatch for {label}: expected {expected}, downloaded {actual}. "
+        "Removed the stale download; re-run to fetch it again."
+    )
 
 
 def _download(url: str, dest: Path, log: Callable[[str], None]) -> None:
@@ -169,7 +223,7 @@ def _download(url: str, dest: Path, log: Callable[[str], None]) -> None:
 
 def ensure_ghidra(
     download: bool = True,
-    ghidra_home: Optional[str] = None,
+    ghidra_home: str | None = None,
     log: Callable[[str], None] = _log,
 ) -> Path:
     """Return a path to ``analyzeHeadless``, downloading a portable build if needed.
@@ -195,12 +249,14 @@ def ensure_ghidra(
         )
 
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    name, url = _latest_ghidra_asset(log)
+    name, url, sha256 = _latest_ghidra_asset(log)
     zip_dest = CACHE_ROOT / name
     if not zip_dest.is_file():
         _download(url, zip_dest, log)
+    if sha256:
+        _verify_sha256(zip_dest, sha256, name, log)
 
-    def _find_unpacked_headless() -> Optional[Path]:
+    def _find_unpacked_headless() -> Path | None:
         # The zip's top-level dir may differ from the zip stem (GitHub Ghidra
         # zips extract to a non-dated dir). Locate analyzeHeadless by scanning
         # the cache rather than guessing the directory name.
@@ -223,9 +279,9 @@ def ensure_ghidra(
 
 def ensure_java(
     download: bool = True,
-    java_home: Optional[str] = None,
+    java_home: str | None = None,
     log: Callable[[str], None] = _log,
-) -> Optional[str]:
+) -> str | None:
     """Return a usable ``java`` path, provisioning a portable JRE if allowed.
 
     Returns None only if no Java is found and downloading is disabled.

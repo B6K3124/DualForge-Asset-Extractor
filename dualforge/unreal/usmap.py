@@ -3,7 +3,6 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Dict, List, Optional
 
 from dualforge.compression import CompressionError, decompress
 
@@ -42,17 +41,17 @@ class UsmapCustomVersion:
 class UsmapPackageVersioning:
     package_file_version: int
     package_licensee_version: int
-    custom_versions: List[UsmapCustomVersion] = field(default_factory=list)
+    custom_versions: list[UsmapCustomVersion] = field(default_factory=list)
     net_cl: int = 0
 
 
 @dataclass
 class UsmapPropertyType:
     kind: str
-    struct_type: Optional[str] = None
-    inner: Optional["UsmapPropertyType"] = None
-    value: Optional["UsmapPropertyType"] = None
-    enum_name: Optional[str] = None
+    struct_type: str | None = None
+    inner: UsmapPropertyType | None = None
+    value: UsmapPropertyType | None = None
+    enum_name: str | None = None
 
 
 @dataclass
@@ -66,17 +65,17 @@ class UsmapProperty:
 @dataclass
 class UsmapStruct:
     name: str
-    super_type: Optional[str] = None
+    super_type: str | None = None
     property_count: int = 0
-    properties: List[UsmapProperty] = field(default_factory=list)
+    properties: list[UsmapProperty] = field(default_factory=list)
 
 
 @dataclass
 class UsmapMappings:
-    names: List[str] = field(default_factory=list)
-    enums: Dict[str, Dict[int, str]] = field(default_factory=dict)
-    structs: Dict[str, UsmapStruct] = field(default_factory=dict)
-    versioning: Optional[UsmapPackageVersioning] = None
+    names: list[str] = field(default_factory=list)
+    enums: dict[str, dict[int, str]] = field(default_factory=dict)
+    structs: dict[str, UsmapStruct] = field(default_factory=dict)
+    versioning: UsmapPackageVersioning | None = None
     version: UsmapVersion = UsmapVersion.Latest
 
 
@@ -191,7 +190,7 @@ class _Reader:
         self.offset += 8
         return value
 
-    def name(self, lut: List[str]) -> Optional[str]:
+    def name(self, lut: list[str]) -> str | None:
         index = self.i32()
         return lut[index] if index != -1 else None
 
@@ -203,18 +202,18 @@ class _Reader:
 
 
 def _parse_payload(
-    payload: bytes, version: UsmapVersion, versioning: Optional[UsmapPackageVersioning]
+    payload: bytes, version: UsmapVersion, versioning: UsmapPackageVersioning | None
 ) -> UsmapMappings:
     reader = _Reader(payload, version)
     names = [reader.string() for _ in range(reader.u32())]
 
-    enums: Dict[str, Dict[int, str]] = {}
+    enums: dict[str, dict[int, str]] = {}
     for _ in range(reader.u32()):
         enum_name = reader.name(names)
         if enum_name is None:
             continue
         count = reader.u16() if version >= UsmapVersion.LargeEnums else reader.u8()
-        values: Dict[int, str] = {}
+        values: dict[int, str] = {}
         if version >= UsmapVersion.ExplicitEnumValues:
             for _ in range(count):
                 value = reader.u64()
@@ -228,7 +227,7 @@ def _parse_payload(
                     values[index] = entry
         enums.setdefault(enum_name, values)
 
-    structs: Dict[str, UsmapStruct] = {}
+    structs: dict[str, UsmapStruct] = {}
     for _ in range(reader.u32()):
         usmap_struct = _parse_struct(reader, names)
         structs[usmap_struct.name] = usmap_struct
@@ -238,14 +237,14 @@ def _parse_payload(
     )
 
 
-def _parse_struct(reader: _Reader, names: List[str]) -> UsmapStruct:
+def _parse_struct(reader: _Reader, names: list[str]) -> UsmapStruct:
     name = reader.name(names)
     if name is None:
         raise UsmapError("struct with null name")
     super_type = reader.name(names)
     property_count = reader.u16()
     serializable_count = reader.u16()
-    properties: List[UsmapProperty] = []
+    properties: list[UsmapProperty] = []
     for _ in range(serializable_count):
         properties.append(_parse_property(reader, names))
     return UsmapStruct(
@@ -254,7 +253,7 @@ def _parse_struct(reader: _Reader, names: List[str]) -> UsmapStruct:
     )
 
 
-def _parse_property(reader: _Reader, names: List[str]) -> UsmapProperty:
+def _parse_property(reader: _Reader, names: list[str]) -> UsmapProperty:
     index = reader.u16()
     array_dim = reader.u8()
     prop_name = reader.name(names)
@@ -278,7 +277,7 @@ _PROPERTY_KINDS = (
 )
 
 
-def _parse_property_type(reader: _Reader, names: List[str]) -> UsmapPropertyType:
+def _parse_property_type(reader: _Reader, names: list[str]) -> UsmapPropertyType:
     type_byte = reader.u8()
     if type_byte >= len(_PROPERTY_KINDS):
         raise UsmapError(f"unknown property type byte 0x{type_byte:02X}")
@@ -377,10 +376,10 @@ def build_usmap(
 
 
 def _build_name_lut(mappings: UsmapMappings):
-    names: List[str] = list(mappings.names)
-    index_of: Dict[str, int] = {name: i for i, name in enumerate(names)}
+    names: list[str] = list(mappings.names)
+    index_of: dict[str, int] = {name: i for i, name in enumerate(names)}
 
-    def add(name: Optional[str]) -> None:
+    def add(name: str | None) -> None:
         if name is None:
             return
         if name not in index_of:
@@ -438,7 +437,7 @@ class _Writer:
         return bytes(self.buffer)
 
 
-def _write_struct(writer: _Writer, struct: UsmapStruct, index_of: Dict[str, int]) -> None:
+def _write_struct(writer: _Writer, struct: UsmapStruct, index_of: dict[str, int]) -> None:
     writer.i32(index_of.get(struct.name, -1))
     writer.i32(index_of.get(struct.super_type, -1) if struct.super_type else -1)
     writer.u16(struct.property_count)
@@ -451,7 +450,7 @@ def _write_struct(writer: _Writer, struct: UsmapStruct, index_of: Dict[str, int]
 
 
 def _write_property_type(
-    writer: _Writer, prop_type: UsmapPropertyType, index_of: Dict[str, int]
+    writer: _Writer, prop_type: UsmapPropertyType, index_of: dict[str, int]
 ) -> None:
     writer.u8(_PROPERTY_KINDS.index(prop_type.kind))
     if prop_type.kind == "EnumProperty":

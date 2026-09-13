@@ -13,7 +13,6 @@ rather than block-level transforms.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
 
 from dualforge.encryption.registry import Context, KeyMaterial, list_schemes, transform
 
@@ -40,11 +39,11 @@ class Stage:
 class TransformPipeline:
     """Ordered sequence of ``Stage`` transforms applied to one data block."""
 
-    def __init__(self, stages: List[Stage]):
+    def __init__(self, stages: list[Stage]):
         self.stages = stages
 
     @classmethod
-    def from_scheme(cls, scheme: str, overrides: dict | None = None) -> "TransformPipeline":
+    def from_scheme(cls, scheme: str, overrides: dict | None = None) -> TransformPipeline:
         """Build a pipeline from a scheme name, splitting '+' into stages.
 
         e.g. ``aes-256+xor8`` -> [Stage('aes-256'), Stage('xor8')].

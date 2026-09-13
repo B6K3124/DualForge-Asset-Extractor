@@ -71,7 +71,7 @@ def test_ensure_ghidra_extracts_zip_with_nonmatching_dir_name(monkeypatch, tmp_p
     monkeypatch.setattr(mgr, "find_analyze_headless", lambda: None)
     monkeypatch.setattr(mgr, "CACHE_ROOT", tmp_path)
     zip_name = "ghidra_11.3.2_PUBLIC_20250315.zip"
-    monkeypatch.setattr(mgr, "_latest_ghidra_asset", lambda log: (zip_name, "http://example.test/ghidra.zip"))
+    monkeypatch.setattr(mgr, "_latest_ghidra_asset", lambda log: (zip_name, "http://example.test/ghidra.zip", ""))
 
     zip_dest = tmp_path / zip_name
     inner = "ghidra_11.3.2_PUBLIC/support/analyzeHeadless.bat"
@@ -89,7 +89,7 @@ def test_ensure_ghidra_raises_when_zip_has_no_headless(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr, "find_analyze_headless", lambda: None)
     monkeypatch.setattr(mgr, "CACHE_ROOT", tmp_path)
     zip_name = "ghidra_11.3.2_PUBLIC_20250315.zip"
-    monkeypatch.setattr(mgr, "_latest_ghidra_asset", lambda log: (zip_name, "http://example.test/ghidra.zip"))
+    monkeypatch.setattr(mgr, "_latest_ghidra_asset", lambda log: (zip_name, "http://example.test/ghidra.zip", ""))
     zip_dest = tmp_path / zip_name
     with zipfile.ZipFile(zip_dest, "w") as zf:
         zf.writestr("ghidra_11.3.2_PUBLIC/README.txt", "hello")

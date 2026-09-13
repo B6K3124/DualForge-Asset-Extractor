@@ -13,7 +13,7 @@ the archive file name and GUID (so derived/hash-keyed schemes can compute keys).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 
 @dataclass
@@ -23,7 +23,7 @@ class KeyMaterial:
     key_str: str = ""
     scheme: str = "aes-256"
     guid: str = ""
-    parameters: Dict[str, str] = field(default_factory=dict)
+    parameters: dict[str, str] = field(default_factory=dict)
 
     def hex_bytes(self) -> bytes:
         """Because AES keys are stored as hex, decode to raw bytes.
@@ -44,12 +44,12 @@ class Context:
     index: bool = False          # True while decrypting the pak index
     offset: int = 0
     length: int = 0
-    extra: Dict[str, str] = field(default_factory=dict)
+    extra: dict[str, str] = field(default_factory=dict)
 
 
 Transformer = Callable[[bytes, KeyMaterial, Context], bytes]
 
-_REGISTRY: Dict[str, Transformer] = {}
+_REGISTRY: dict[str, Transformer] = {}
 
 
 def register(name: str, fn: Transformer | None = None) -> Transformer:
@@ -68,11 +68,11 @@ def register(name: str, fn: Transformer | None = None) -> Transformer:
     return fn
 
 
-def get_scheme(name: str) -> Optional[Transformer]:
+def get_scheme(name: str) -> Transformer | None:
     return _REGISTRY.get(name)
 
 
-def list_schemes() -> List[str]:
+def list_schemes() -> list[str]:
     return sorted(_REGISTRY)
 
 

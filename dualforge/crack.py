@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from collections.abc import Callable
 
 from dualforge.encryption.brute import probe_pak_blocks, validate_key
 from dualforge.unreal.autodetect import find_game_executable, find_install_root
@@ -36,7 +37,7 @@ def find_validation_pak(pak_or_folder: str) -> str:
     if candidate.is_file():
         return str(candidate)
     root = find_install_root(pak_or_folder)
-    best: Optional[Tuple[str, int]] = None
+    best: tuple[str, int] | None = None
     for pak in root.rglob("*.pak"):
         # skip tiny patch paks; prefer a full archive but any is fine
         if best is None:
@@ -56,7 +57,7 @@ def run_ghidra_hunt(
     binary: str,
     ghidra_home: Path,
     startup_timeout: int = 300,
-) -> Tuple[Optional[int], str, str]:
+) -> tuple[int | None, str, str]:
     """Run the static Ghidra hunt, returning (returncode, stdout, json_path)."""
     tmpdir = Path(tempfile.mkdtemp(prefix="dualforge_hunt_"))
     json_path = tmpdir / "candidates.json"
@@ -77,9 +78,18 @@ def run_ghidra_hunt(
     return completed.returncode, completed.stdout + completed.stderr, str(json_path)
 
 
-def extract_candidate_keys(json_path: Optional[str], limit: int = 64) -> List[str]:
+def _cleanup_hunt_json(json_path: str | None) -> None:
+    """Remove the hunt temp dir (parent of the JSON result) if it is ours."""
+    if not json_path:
+        return
+    tmpdir = Path(json_path).parent
+    if tmpdir.name.startswith("dualforge_hunt_"):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def extract_candidate_keys(json_path: str | None, limit: int = 64) -> list[str]:
     """Flatten the 32-byte hex candidates from a hunt JSON result."""
-    keys: List[str] = []
+    keys: list[str] = []
     if not json_path or not Path(json_path).is_file():
         return keys
     try:
@@ -96,9 +106,9 @@ def extract_candidate_keys(json_path: Optional[str], limit: int = 64) -> List[st
     return keys
 
 
-def validate_keys_against_pak(pak_path: str, keys: List[str], block_count: int = 16, scheme: str = "aes-256") -> List[str]:
+def validate_keys_against_pak(pak_path: str, keys: list[str], block_count: int = 16, scheme: str = "aes-256") -> list[str]:
     """Return the subset of ``keys`` that successfully decrypt the pak index."""
-    verified: List[str] = []
+    verified: list[str] = []
     with open(pak_path, "rb") as fh:
         # read enough of the file (tail) to locate index blocks
         size = fh.seek(0, 2)
@@ -124,9 +134,9 @@ def crack(
     pak_or_folder: str,
     download: bool = True,
     startup_timeout: int = 300,
-    ghidra_home: Optional[str] = None,
+    ghidra_home: str | None = None,
     save_keys: bool = True,
-    title: Optional[str] = None,
+    title: str | None = None,
     block_count: int = 16,
 ) -> dict:
     """Run the full auto-crack pipeline and return a result dict."""
@@ -151,6 +161,7 @@ def crack(
     # 4. Run the static hunt.
     returncode, output, json_path = run_ghidra_hunt(exe, ghidra_root or headless, startup_timeout)
     if returncode != 0:
+        _cleanup_hunt_json(json_path)
         return {
             "status": "hunt_failed",
             "exe": exe,
@@ -160,10 +171,13 @@ def crack(
         }
 
     # 5. Validate candidates against the real pak.
-    candidates = extract_candidate_keys(json_path)
+    try:
+        candidates = extract_candidate_keys(json_path)
+    finally:
+        _cleanup_hunt_json(json_path)
     verified = validate_keys_against_pak(pak, candidates, block_count=block_count)
 
-    saved: List[str] = []
+    saved: list[str] = []
     if save_keys and verified:
         store = KeyStore()
         base_title = title or Path(exe).stem
@@ -189,11 +203,11 @@ def crack_all(
     pak_or_folder: str,
     download: bool = True,
     startup_timeout: int = 300,
-    ghidra_home: Optional[str] = None,
+    ghidra_home: str | None = None,
     save_keys: bool = True,
-    title: Optional[str] = None,
+    title: str | None = None,
     block_count: int = 16,
-    log: Optional[Callable[[str], None]] = None,
+    log: Callable[[str], None] | None = None,
 ) -> dict:
     """Scan every detected binary under the install root and return verified keys.
 
@@ -227,8 +241,8 @@ def crack_all(
     ghidra_root = headless.parents[1]
 
     # 4. Scan every candidate, collecting and deduplicating candidates.
-    all_candidates: List[str] = []
-    hunt_results: List[dict] = []
+    all_candidates: list[str] = []
+    hunt_results: list[dict] = []
     for rank_index, (exe_path, score) in enumerate(ranked, start=1):
         _emit(f"[{rank_index}/{len(ranked)}] scanning {Path(exe_path).name} (score {score:.0f})...")
         returncode, output, json_path = run_ghidra_hunt(
@@ -236,13 +250,17 @@ def crack_all(
         )
         if returncode != 0:
             _emit(f"  hunt failed (exit {returncode}), skipping")
+            _cleanup_hunt_json(json_path)
             hunt_results.append({
                 "exe": exe_path,
                 "status": "hunt_failed",
                 "returncode": returncode,
             })
             continue
-        candidates = extract_candidate_keys(json_path)
+        try:
+            candidates = extract_candidate_keys(json_path)
+        finally:
+            _cleanup_hunt_json(json_path)
         new = [k for k in candidates if k not in all_candidates]
         all_candidates.extend(new)
         _emit(f"  found {len(candidates)} candidate(s) ({len(new)} new)")
@@ -269,7 +287,7 @@ def crack_all(
     _emit(f"{len(verified)} key(s) verified")
 
     # 6. Save verified keys.
-    saved: List[str] = []
+    saved: list[str] = []
     if save_keys and verified:
         store = KeyStore()
         base_title = title or Path(pak_or_folder).stem

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -57,7 +56,7 @@ class ProfilesDialog(QDialog):
         buttons.addWidget(close_btn)
         layout.addLayout(buttons)
 
-        self._profile_to_load: Optional[dict] = None
+        self._profile_to_load: dict | None = None
 
     def _rebuild(self) -> None:
         self.list_widget.clear()
@@ -68,7 +67,7 @@ class ProfilesDialog(QDialog):
                 row += f"  [AES: {key[:8]}...]"
             self.list_widget.addItem(row)
 
-    def _selected(self) -> Optional[dict]:
+    def _selected(self) -> dict | None:
         row = self.list_widget.currentRow()
         if row < 0 or row >= len(self.settings.profiles):
             return None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
@@ -12,11 +11,11 @@ def normalize_path(path: str) -> str:
     return path.replace("\\", "/").lstrip("/")
 
 
-def split_parts(path: str) -> List[str]:
+def split_parts(path: str) -> list[str]:
     return [part for part in normalize_path(path).split("/") if part]
 
 
-def folder_key(parts: List[str]) -> str:
+def folder_key(parts: list[str]) -> str:
     return "/".join(parts)
 
 
@@ -28,16 +27,16 @@ class AssetTreeBuilder:
     items are attached to.
     """
 
-    def __init__(self, tree: QTreeWidget, root: Optional[QTreeWidgetItem] = None):
+    def __init__(self, tree: QTreeWidget, root: QTreeWidgetItem | None = None):
         self.tree = tree
         self.root = root
-        self._folders: Dict[str, QTreeWidgetItem] = {}
+        self._folders: dict[str, QTreeWidgetItem] = {}
 
-    def reset(self, root: Optional[QTreeWidgetItem] = None) -> None:
+    def reset(self, root: QTreeWidgetItem | None = None) -> None:
         self.root = root
         self._folders = {}
 
-    def _folder_item(self, parts: List[str]) -> QTreeWidgetItem:
+    def _folder_item(self, parts: list[str]) -> QTreeWidgetItem:
         if not parts:
             raise ValueError("folder requires at least one part")
         key = folder_key(parts)
@@ -90,8 +89,8 @@ class AssetTreeBuilder:
         return item
 
 
-def iter_leaves(item: QTreeWidgetItem) -> List[QTreeWidgetItem]:
-    out: List[QTreeWidgetItem] = []
+def iter_leaves(item: QTreeWidgetItem) -> list[QTreeWidgetItem]:
+    out: list[QTreeWidgetItem] = []
     for index in range(item.childCount()):
         child = item.child(index)
         data = child.data(0, USER_ROLE)
@@ -102,7 +101,7 @@ def iter_leaves(item: QTreeWidgetItem) -> List[QTreeWidgetItem]:
     return out
 
 
-def checked_leaves(item: QTreeWidgetItem) -> List[QTreeWidgetItem]:
+def checked_leaves(item: QTreeWidgetItem) -> list[QTreeWidgetItem]:
     leaves = iter_leaves(item)
     return [leaf for leaf in leaves if leaf.checkState(0) != Qt.CheckState.Unchecked]
 
@@ -114,7 +113,7 @@ def set_all_checkstates(item: QTreeWidgetItem, state: Qt.CheckState) -> None:
         set_all_checkstates(child, state)
 
 
-def matches(item: QTreeWidgetItem, text: str, type_filter: Optional[str], use_regex: bool) -> bool:
+def matches(item: QTreeWidgetItem, text: str, type_filter: str | None, use_regex: bool) -> bool:
     data = item.data(0, USER_ROLE)
     if data and data.get("folder"):
         return False
@@ -136,7 +135,7 @@ def matches(item: QTreeWidgetItem, text: str, type_filter: Optional[str], use_re
 def apply_filter(
     tree: QTreeWidget,
     text: str,
-    type_filter: Optional[str],
+    type_filter: str | None,
     use_regex: bool,
 ) -> int:
     """Hide non-matching items recursively; returns the number of visible leaves."""
@@ -164,7 +163,7 @@ def apply_filter(
     return visible
 
 
-def collect_entry_data(item: QTreeWidgetItem) -> Tuple[str, dict]:
+def collect_entry_data(item: QTreeWidgetItem) -> tuple[str, dict]:
     data = item.data(0, USER_ROLE)
     return item.text(0), data
 

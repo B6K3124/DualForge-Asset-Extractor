@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import struct
 import zlib
-from typing import Dict, List, Sequence, Tuple
+from collections.abc import Sequence
 
 from dualforge.bethesda.archive import (
     BA2_MAGIC,
@@ -43,7 +43,7 @@ def _uvarint_prefixed(name: str) -> bytes:
 
 def build_bsa(
     *,
-    files: Sequence[Tuple[str, str, bytes]],
+    files: Sequence[tuple[str, str, bytes]],
     version: int = 104,
     compress: bool = False,
     streamed: bool = False,
@@ -74,8 +74,8 @@ def build_bsa(
         raise ValueError(f"unsupported bsa version {version}")
 
     # Group files per folder, preserving order.
-    ordered: List[str] = []
-    by_folder: Dict[str, List[Tuple[str, bytes]]] = {}
+    ordered: list[str] = []
+    by_folder: dict[str, list[tuple[str, bytes]]] = {}
     for rel, folder, data in files:
         if folder not in by_folder:
             by_folder[folder] = []
@@ -116,7 +116,7 @@ def build_bsa(
 
     # file names (CString-style, uvarint-prefixed without NUL)
     file_names = bytearray()
-    for rel, folder, _data in files:
+    for rel, _folder, _data in files:
         file_names += _uvarint_prefixed(rel.split("/")[-1])
 
     header_size = 32
@@ -143,7 +143,7 @@ def build_bsa(
     data = bytearray()
     file_offsets = []
     blob_sizes = []
-    for rel, folder_name, content in files:
+    for _rel, _folder_name, content in files:
         blob, = _encode_blob(content, version, compress)
         file_offsets.append(data_offset + len(data))
         blob_sizes.append(len(blob))
@@ -155,7 +155,7 @@ def build_bsa(
     for folder, entries in folders:
         if archive_flags & FLAG_DIRECTORIES_NAMED:
             folder_blocks2 += _uvarint_prefixed(folder)
-        for rel, content in entries:
+        for rel, _content in entries:
             size_flags = blob_sizes[fi] & FILE_SIZE_MASK
             if compress:
                 size_flags |= FILE_COMPRESSED_MASK
@@ -268,7 +268,7 @@ def _hash(name: str) -> int:
     return zlib.crc32(name.encode("utf-8"))
 
 
-def build_ba2_general(*, files: Sequence[Tuple[str, bytes]], compress: bool = False) -> bytes:
+def build_ba2_general(*, files: Sequence[tuple[str, bytes]], compress: bool = False) -> bytes:
     """Build a BA2 GNRL archive. ``files`` = (relative_path, data)."""
     header_size = 28
     entry_count = len(files)
@@ -282,7 +282,7 @@ def build_ba2_general(*, files: Sequence[Tuple[str, bytes]], compress: bool = Fa
     data_base = header_size + entry_count * 36 + len(name_blob)
 
     offsets = []
-    for rel, content in files:
+    for _rel, content in files:
         payload = zlib.compress(content) if compress else content
         packed = len(payload) if compress else 0
         offsets.append(data_base + len(data_blob))
@@ -310,15 +310,12 @@ def build_ba2_general(*, files: Sequence[Tuple[str, bytes]], compress: bool = Fa
 
 
 def _ext4(name: str) -> bytes:
-    if "." in name:
-        ext = name.rsplit(".", 1)[1]
-    else:
-        ext = ""
+    ext = name.rsplit(".", 1)[1] if "." in name else ""
     return ext.ljust(4, "\x00")[:4].encode("ascii")
 
 
 def build_ba2_dx10(
-    *, files: Sequence[Tuple[str, int, int, int, int, bytes]], compress: bool = False
+    *, files: Sequence[tuple[str, int, int, int, int, bytes]], compress: bool = False
 ) -> bytes:
     """Build a BA2 DX10 (texture) archive.
 
@@ -343,7 +340,7 @@ def build_ba2_dx10(
 
     data_base = pos + len(name_blob)
     data_offsets = []
-    for rel, _w, _h, _m, _f, pixel in files:
+    for _rel, _w, _h, _m, _f, pixel in files:
         payload = zlib.compress(pixel) if compress else pixel
         data_offsets.append(data_base + len(data_blob))
         data_blob += payload

@@ -6,9 +6,11 @@ import io
 import lzma
 import zlib
 import zipfile
-from typing import Optional
 
 from dualforge.compression.oodle import Oodle, OodleDecompressError, OodleUnavailableError
+from dualforge.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class CompressionError(Exception):
@@ -128,9 +130,9 @@ def is_available(method: str) -> bool:
 def decompress(
     data: bytes,
     method: str,
-    output_size: Optional[int] = None,
-    archive_member: Optional[str] = None,
-    oodle_dll: Optional[str] = None,
+    output_size: int | None = None,
+    archive_member: str | None = None,
+    oodle_dll: str | None = None,
 ) -> bytes:
     method = (method or "none").lower()
     if method == "none":
@@ -151,7 +153,8 @@ def decompress(
             return block.decompress(data)
         except Exception:
             if output_size is None:
-                raise CompressionError("lz4/lz4hc block decompression requires output_size")
+                raise CompressionError("lz4/lz4hc block decompression requires output_size") from None
+            logger.debug("lz4 block retry with explicit output_size")
             return block.decompress(data, uncompressed_size=output_size)
     if method == "zstd":
         max_size = output_size or 2 ** 31 - 1
@@ -171,7 +174,7 @@ def decompress(
     raise CompressionError(f"unknown compression method: {method!r}")
 
 
-def _extract_zip(data: bytes, member: Optional[str]) -> bytes:
+def _extract_zip(data: bytes, member: str | None) -> bytes:
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         names = zf.namelist()
         if member is not None:
@@ -182,19 +185,19 @@ def _extract_zip(data: bytes, member: Optional[str]) -> bytes:
     raise CompressionError("zip archive contains no files")
 
 
-def _extract_7z(data: bytes, member: Optional[str]) -> bytes:
+def _extract_7z(data: bytes, member: str | None) -> bytes:
     py7zr = _py7zr()
     with py7zr.SevenZipFile(io.BytesIO(data), mode="r") as archive:
         if member is not None:
             with archive.read([member]) as extracted:
                 for out in extracted.values():
                     return out.read()
-        for name, out in archive.readall().items():
+        for _name, out in archive.readall().items():
             return out.read()
     raise CompressionError("7z archive contains no files")
 
 
-def compress(data: bytes, method: str, level: Optional[int] = None) -> bytes:
+def compress(data: bytes, method: str, level: int | None = None) -> bytes:
     """Compress with the given method (zstd/brotli only)."""
     method = (method or "none").lower()
     if method == "none":
@@ -209,7 +212,7 @@ def compress(data: bytes, method: str, level: Optional[int] = None) -> bytes:
     raise CompressionError(f"cannot compress with method: {method!r}")
 
 
-def sniff(data: bytes) -> Optional[str]:
+def sniff(data: bytes) -> str | None:
     if not data:
         return None
     if data.startswith(b"\x1f\x8b"):

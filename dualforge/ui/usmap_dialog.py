@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import (
@@ -54,12 +53,12 @@ class UsmapDumpWorker(QThread):
 class UsmapDumpDialog(QDialog):
     """Tools > Generate USMAP: dump names from a running UE5 game process."""
 
-    def __init__(self, parent=None, suggested_exe: Optional[str] = None):
+    def __init__(self, parent=None, suggested_exe: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("Generate USMAP from Running Game")
         self.resize(680, 460)
-        self._worker: Optional[UsmapDumpWorker] = None
-        self._processes: List[Tuple[int, str]] = []
+        self._worker: UsmapDumpWorker | None = None
+        self._processes: list[tuple[int, str]] = []
         self._suggested_exe = suggested_exe
 
         layout = QVBoxLayout(self)
@@ -124,7 +123,7 @@ class UsmapDumpDialog(QDialog):
             match_index = -1
             if self._suggested_exe:
                 wanted = Path(self._suggested_exe).name.lower()
-                for index, (pid, exe) in enumerate(self._processes):
+                for index, (_pid, exe) in enumerate(self._processes):
                     if exe.lower() == wanted:
                         match_index = index
                         break

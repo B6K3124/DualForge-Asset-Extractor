@@ -32,7 +32,6 @@ import struct
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 MAGIC = 0x324F4352
 
@@ -59,11 +58,11 @@ class LocresEntry:
 
 @dataclass
 class LocresFile:
-    version: Optional[int] = None
+    version: int | None = None
     magic_ok: bool = False
-    entries: List[LocresEntry] = field(default_factory=list)
+    entries: list[LocresEntry] = field(default_factory=list)
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> dict[str, str]:
         return {entry.qualified_key: entry.value for entry in self.entries}
 
     def to_json(self, indent: int = 2) -> str:
@@ -120,7 +119,7 @@ def _read_string_tables(data: bytes, pos: int):
     for _ in range(table_count):
         namespace, pos = _read_fstring(data, pos)
         entry_count, pos = _u32_value(data, pos)
-        entries: List[Tuple[str, str]] = []
+        entries: list[tuple[str, str]] = []
         for _ in range(entry_count):
             key, pos = _read_fstring(data, pos)
             value, pos = _read_fstring(data, pos)
@@ -128,7 +127,7 @@ def _read_string_tables(data: bytes, pos: int):
         yield namespace, entries
 
 
-def _read_fstring(data: bytes, pos: int) -> Tuple[str, int]:
+def _read_fstring(data: bytes, pos: int) -> tuple[str, int]:
     length, pos = _i32_value(data, pos)
     if length == 0:
         return "", pos
@@ -154,13 +153,13 @@ def _u32(data: bytes, pos: int) -> int:
     return int.from_bytes(data[pos : pos + 4], "little", signed=False)
 
 
-def _u32_value(data: bytes, pos: int) -> Tuple[int, int]:
+def _u32_value(data: bytes, pos: int) -> tuple[int, int]:
     if pos + 4 > len(data):
         raise ValueError("locres data truncated")
     return _u32(data, pos), pos + 4
 
 
-def _i32_value(data: bytes, pos: int) -> Tuple[int, int]:
+def _i32_value(data: bytes, pos: int) -> tuple[int, int]:
     if pos + 4 > len(data):
         raise ValueError("locres data truncated")
     return int.from_bytes(data[pos : pos + 4], "little", signed=True), pos + 4
@@ -178,9 +177,9 @@ def parse_locres_file(path: str) -> LocresFile:
 
 
 def apply_replacements(
-    entries: List[LocresEntry],
-    replacements: Dict[str, str],
-) -> List[LocresEntry]:
+    entries: list[LocresEntry],
+    replacements: dict[str, str],
+) -> list[LocresEntry]:
     """Return new entries with ``qualified_key`` -> new value applied."""
     out = [LocresEntry(namespace=e.namespace, key=e.key, source=e.source, value=e.value) for e in entries]
     for entry in out:
@@ -190,7 +189,7 @@ def apply_replacements(
     return out
 
 
-def encode_locres(entries: List[LocresEntry], version: int = 3) -> bytes:
+def encode_locres(entries: list[LocresEntry], version: int = 3) -> bytes:
     """Serialize entries back to the .locres binary layout.
 
     ``version`` selects which magic header to write: 2 = legacy, 3 = optimized
@@ -211,7 +210,7 @@ def encode_locres(entries: List[LocresEntry], version: int = 3) -> bytes:
         length = -(len(text) + 1)
         return struct.pack("<i", length) + encoded
 
-    tables: "OrderedDict[str, List[LocresEntry]]" = OrderedDict()
+    tables: OrderedDict[str, list[LocresEntry]] = OrderedDict()
     for entry in entries:
         tables.setdefault(entry.namespace, []).append(entry)
 
@@ -227,7 +226,7 @@ def encode_locres(entries: List[LocresEntry], version: int = 3) -> bytes:
     return header + body
 
 
-def save_locres(path: str, entries: List[LocresEntry], version: int = 3) -> int:
+def save_locres(path: str, entries: list[LocresEntry], version: int = 3) -> int:
     """Write entries to ``path`` as a .locres file; returns entry count."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_bytes(encode_locres(entries, version=version))

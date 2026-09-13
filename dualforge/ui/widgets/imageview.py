@@ -5,7 +5,13 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 
-def _checker_brush(size: int = 12, light: QColor = QColor("#ffffff"), dark: QColor = QColor("#d4d7de")) -> QBrush:
+def _checker_brush(
+    size: int = 12,
+    light: QColor | None = None,
+    dark: QColor | None = None,
+) -> QBrush:
+    light = QColor("#ffffff") if light is None else light
+    dark = QColor("#d4d7de") if dark is None else dark
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.fill(dark)
     painter = QPainter(pixmap)

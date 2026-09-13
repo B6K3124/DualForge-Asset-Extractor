@@ -23,7 +23,7 @@ def test_fixture_is_detected_as_unity_bundle():
 
 
 def test_archive_lists_container_mesh():
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     archive = UnityArchive(str(FIXTURE))
     assets = list(archive.assets())
@@ -35,7 +35,7 @@ def test_archive_lists_container_mesh():
 
 
 def test_archive_exposes_engine_versions():
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     archive = UnityArchive(str(FIXTURE))
     assert archive.engine_version().startswith("2022")
@@ -46,7 +46,7 @@ def test_mesh_preview_decodes_geometry():
     from UnityPy.export import MeshExporter
 
     from dualforge.ui.preview_helpers import parse_obj
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     archive = UnityArchive(str(FIXTURE))
     asset = list(archive.assets())[0]
@@ -62,7 +62,7 @@ def test_mesh_preview_decodes_geometry():
 
 def test_unity_preview_payload_contains_mesh(tmp_path: Path):
     from dualforge.ui.preview import PreviewItem, PreviewWorker
-    from dualforge.unity.unity_module import UnityArchive
+    from dualforge.unity.archive import UnityArchive
 
     archive = UnityArchive(str(FIXTURE))
     asset = list(archive.assets())[0]

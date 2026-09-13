@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from dualforge.export.texture import image_to_dds, image_to_ktx, load_image
+from dualforge.unity import UnityError
 from dualforge.unity.repack import replace_font, replace_text_asset, replace_texture, save_archive
 
 
@@ -104,7 +105,7 @@ def test_save_archive_delegates(tmp_path: Path):
 
 
 def test_save_archive_rejects_unknown_pack():
-    with pytest.raises(Exception):
+    with pytest.raises(UnityError):
         save_archive(_FakeArchive(), "out", pack="bogus")
 
 
@@ -113,7 +114,7 @@ def test_save_archive_refuses_source_directory(tmp_path: Path):
     source.write_bytes(b"fake")
     env = _FakeEnv()
     archive = NS(env=env, path=str(source))
-    with pytest.raises(Exception):
+    with pytest.raises(UnityError):
         save_archive(archive, str(tmp_path), "none")  # same folder as source
 
 
@@ -141,7 +142,7 @@ def test_save_archive_raises_when_nothing_written(tmp_path: Path):
     source = tmp_path / "game.bundle"
     source.write_bytes(b"fake")
     archive = NS(env=_FakeEnv(), path=str(source))
-    with pytest.raises(Exception):
+    with pytest.raises(UnityError):
         save_archive(archive, str(tmp_path / "empty_out"), "none")
 
 
@@ -173,7 +174,7 @@ def test_replace_texture(tmp_path: Path):
 def test_replace_texture_wrong_type_raises():
     obj = _FakeObj()
     obj.type.name = "Mesh"
-    with pytest.raises(Exception):
+    with pytest.raises(UnityError):
         replace_texture(_FakeArchive(), _FakeAsset(obj), "x.png")
 
 
@@ -201,5 +202,5 @@ def test_replace_font_empty_raises(tmp_path: Path):
     obj.type.name = "Font"
     font = tmp_path / "empty.ttf"
     font.write_bytes(b"")
-    with pytest.raises(Exception):
+    with pytest.raises(UnityError):
         replace_font(_FakeArchive(), _FakeAsset(obj), str(font))

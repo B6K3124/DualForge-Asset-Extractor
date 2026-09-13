@@ -50,7 +50,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from collections.abc import Iterator
 
 RDAR_MAGIC = b"RDAR"
 
@@ -131,7 +131,7 @@ class RedArchive:
         if entries_end > len(data):
             raise RedError("file entries extend beyond index")
 
-        self._entries: List[_FileEntry] = []
+        self._entries: list[_FileEntry] = []
         for i in range(entry_count):
             off = entry_off + i * _FILE_ENTRY_SIZE
             e = data[off : off + _FILE_ENTRY_SIZE]
@@ -153,7 +153,7 @@ class RedArchive:
         if segs_end > len(data):
             raise RedError("segments extend beyond index")
 
-        self._segments: List[_Segment] = []
+        self._segments: list[_Segment] = []
         for i in range(seg_count):
             off = seg_off + i * _SEGMENT_SIZE
             s = data[off : off + _SEGMENT_SIZE]
@@ -175,11 +175,11 @@ class RedArchive:
         for entry in self._entries:
             yield self._hash_to_name(entry.name_hash)
 
-    def list_file_hashes(self) -> List[int]:
+    def list_file_hashes(self) -> list[int]:
         """Return the raw 64-bit FNV-1a hashes of every entry."""
         return [e.name_hash for e in self._entries]
 
-    def get_entry(self, name: str) -> Optional[_FileEntry]:
+    def get_entry(self, name: str) -> _FileEntry | None:
         """Look up an entry by its hex-hash pseudo-path."""
         try:
             hash_int = int(Path(name).stem, 16)
@@ -199,20 +199,18 @@ class RedArchive:
 
     def extract_file(self, name: str, out_dir: str) -> str:
         """Extract a single entry to *out_dir*, returning the written path."""
-        from dualforge.export import Exporter
+        from dualforge.export.exporter import write_entry
 
-        data = self.open_file(name)
-        exporter = Exporter(out_dir)
-        return exporter.write(name, data)
+        return write_entry(out_dir, name, self.open_file(name))
 
     def extract_all(
-        self, out_dir: str, progress: Optional[object] = None
-    ) -> List[str]:
+        self, out_dir: str, progress: object | None = None
+    ) -> list[str]:
         """Extract every entry. Returns written file paths."""
         from dualforge.export import Exporter
 
         exporter = Exporter(out_dir)
-        written: List[str] = []
+        written: list[str] = []
         total = len(self._entries)
         for idx, entry in enumerate(self._entries):
             name = self._hash_to_name(entry.name_hash)
@@ -232,7 +230,7 @@ class RedArchive:
                 f"entry has no segments (hash=0x{entry.name_hash:016x})"
             )
 
-        parts: List[bytes] = []
+        parts: list[bytes] = []
         for i in range(entry.segments_start, entry.segments_end):
             if i >= len(self._segments):
                 raise RedError(f"segment index {i} out of range")

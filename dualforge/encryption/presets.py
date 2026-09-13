@@ -20,17 +20,17 @@ Each preset:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set
+from collections.abc import Callable
 
 
 @dataclass
 class GameScheme:
     name: str
     label: str
-    games: Set[str] = field(default_factory=set)
-    stages: List[str] = field(default_factory=list)
-    default_params: Dict[str, str] = field(default_factory=dict)
-    detect: Optional[Callable[[str, str], bool]] = None
+    games: set[str] = field(default_factory=set)
+    stages: list[str] = field(default_factory=list)
+    default_params: dict[str, str] = field(default_factory=dict)
+    detect: Callable[[str, str], bool] | None = None
 
 
 # Stage names must exist in the registry; unknown names are ignored by
@@ -42,7 +42,7 @@ class GameScheme:
 #   unity-cn           Unity CN Pro 16-char bundle XOR
 #   derived-xor-md5    Star-Savior-style filename-md5 XOR mask
 
-PRESETS: List[GameScheme] = [
+PRESETS: list[GameScheme] = [
     GameScheme(
         name="aes-256",
         label="Standard AES-256",
@@ -107,14 +107,14 @@ PRESETS: List[GameScheme] = [
     ),
 ]
 
-_BY_NAME: Dict[str, GameScheme] = {p.name: p for p in PRESETS}
+_BY_NAME: dict[str, GameScheme] = {p.name: p for p in PRESETS}
 
 
-def get_preset(name: str) -> Optional[GameScheme]:
+def get_preset(name: str) -> GameScheme | None:
     return _BY_NAME.get(name)
 
 
-def guess_scheme(mount: str = "", archive_name: str = "", game: str = "") -> Optional[GameScheme]:
+def guess_scheme(mount: str = "", archive_name: str = "", game: str = "") -> GameScheme | None:
     """Pick a preset by matching the pak mount point / game title.
 
     Returns the first preset whose ``detect`` passes or whose ``games`` set

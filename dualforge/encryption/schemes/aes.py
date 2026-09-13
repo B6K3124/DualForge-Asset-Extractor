@@ -11,9 +11,7 @@ def _aes_ecb_decrypt(key_bytes: bytes, data: bytes) -> bytes:
     from cryptography.hazmat.backends import default_backend
 
     klen = len(key_bytes)
-    if klen == 32:
-        alg = algorithms.AES(key_bytes)
-    elif klen == 16:
+    if klen == 32 or klen == 16:
         alg = algorithms.AES(key_bytes)
     else:
         raise ValueError(f"unsupported AES key length: {klen}")

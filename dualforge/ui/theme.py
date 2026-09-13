@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
 
 from PySide6.QtWidgets import QApplication
 
@@ -296,7 +295,7 @@ def apply_theme(app: QApplication, name: str) -> None:
     app.setStyleSheet(qss(palette))
 
 
-def available_themes() -> Dict[str, str]:
+def available_themes() -> dict[str, str]:
     return {DARK.name: DARK.name.title(), LIGHT.name: LIGHT.name.title()}
 
 
