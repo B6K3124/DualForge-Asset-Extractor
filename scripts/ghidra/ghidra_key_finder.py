@@ -6,9 +6,12 @@ One command, zero questions::
 
 The orchestrator:
 
-1. Discovers a local Ghidra install (``GHIDRA_HOME``, common paths, PATH)
-   and the ``ghidra_bridge`` pip package (auto-installs it if missing,
-   unless ``--no-auto-install``).
+1. Discovers a local Ghidra install (``GHIDRA_HOME``, the managed cache
+   ``~/.dualforge/ghidra``, common paths, PATH) and the ``ghidra_bridge``
+   pip package (auto-installs it if missing, unless ``--no-auto-install``).
+   A Ghidra/JRE staged into the managed cache by
+   ``dualforge.ghidra.manager`` (or ``dualforge crack run``) is picked up
+   automatically, so no env vars or flags are needed.
 2. Launches ``analyzeHeadless`` importing the target binary with
    ``ghidra_key_finder_server.py`` as a ``-postScript`` and ``-deleteProject``
    for guaranteed cleanup.
@@ -45,6 +48,9 @@ CHUNK_SIZE = 4 * 1024 * 1024
 CONNECT_PORT = 4768  # ghidra_bridge package default server port
 STARTUP_TIMEOUT = 300
 RESPONSE_TIMEOUT = 120
+
+# Managed toolchain cache (must mirror dualforge.ghidra.manager.CACHE_ROOT).
+CACHE_DIR = Path.home() / ".dualforge" / "ghidra"
 
 EXIT_OK = 0
 EXIT_NO_GHIDRA = 3
@@ -338,6 +344,10 @@ def find_analyze_headless() -> Path | None:
     if home:
         root = Path(home)
         candidates.append(root / "support" / ("analyzeHeadless.bat" if _is_windows() else "analyzeHeadless"))
+    # Managed cache: any unpacked Ghidra under ~/.dualforge/ghidra.
+    if CACHE_DIR.is_dir():
+        for match in CACHE_DIR.glob("ghidra_*/support/analyzeHeadless*"):
+            candidates.append(match)
     search_roots = [
         Path.cwd(),
         Path.home(),
@@ -372,6 +382,11 @@ def find_java() -> str | None:
         candidate = Path(os.environ["JAVA_HOME"]) / "bin" / ("java.exe" if _is_windows() else "java")
         if candidate.is_file():
             return str(candidate)
+    # Portable JRE staged into the managed cache (prefer it over PATH).
+    if CACHE_DIR.is_dir():
+        for match in CACHE_DIR.glob("*/bin/java*"):
+            if match.is_file():
+                return str(match)
     java = shutil.which("java")
     if java:
         return java

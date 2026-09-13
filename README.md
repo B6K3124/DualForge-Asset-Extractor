@@ -1,22 +1,22 @@
 # DualForge
 
-### Extract assets from **any** Unity or Unreal game — one tool, both engines.
+### Extract assets from **any** Unity, Unreal, Bethesda (Gamebryo), or REDengine game — one tool, all engines.
 
-**DualForge** is a modern desktop extractor and asset browser for Unity and Unreal Engine games.
+**DualForge** is a modern desktop extractor and asset browser for Unity, Unreal, Bethesda Gamebryo, and CD Projekt RED games.
 Browse, preview, and export textures, meshes, audio, animations, and more — with full support for
 encrypted archives, compressed bundles, and a built-in hex inspector for everything else.
 
-![engine](https://img.shields.io/badge/engine-Unity%20%2F%20Unreal-orange?style=for-the-badge) ![platform](https://img.shields.io/badge/platform-Windows-blueviolet?style=for-the-badge) ![python](https://img.shields.io/badge/python-3.10%2B-yellow?style=for-the-badge) ![license](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
+![engine](https://img.shields.io/badge/engine-Unity%20%2F%20Unreal%20%2B%20Gamebryo-orange?style=for-the-badge) ![platform](https://img.shields.io/badge/platform-Windows-blueviolet?style=for-the-badge) ![python](https://img.shields.io/badge/python-3.10%2B-yellow?style=for-the-badge) ![license](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 
 > DualForge is **free to use**. Decryption and decompression happen entirely in-memory —
 > it never patches, modifies, or redistributes game files or third-party DLLs.
 
 ![DualForge asset browser](docs/screenshots/hero.png)
 
-Live 3D mesh previews (texture-mapped GLB, both engines):
+Live 3D mesh previews (texture-mapped, Unreal GLB + Bethesda NIF):
 
 ![TEKKEN 8 fighter — Unreal skeletal mesh preview](docs/screenshots/tekken-model.png)
-![Skyrim head — Bethesda NIF mesh preview](docs/screenshots/head-model.png)
+![Skyrim head — Bethesda Gamebryo NIF mesh preview](docs/screenshots/head-model.png)
 
 
 ---
@@ -55,7 +55,7 @@ pip install -e ".[snappy]"  # snappy codec support
 
 ## Usage
 
-Open an archive — **drag-and-drop** a `.pak`, `.utoc`/`.ucas`, or Unity bundle onto the window.
+Open an archive — **drag-and-drop** a `.pak`, `.utoc`/`.ucas`, Bethesda `.bsa`/`.ba2`, or Unity bundle onto the window.
 Click any asset to preview it, then **Extract All** to a folder or **Export Selected** for just the checked assets.
 
 ```
@@ -146,6 +146,8 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 | Property inspector (MonoBehaviour) | ✅ | ✅ | ✅ | ✅ | limited |
 | **Write-back / repack** | ✅ | – | ✅ | – | – |
 | **USD world export** | ✅ | partial | – | partial | – |
+| Bethesda Gamebryo BSA/BA2 + NIF preview | ✅ | – | – | – | – |
+| CDPR REDengine `.archive` | ✅ | – | – | – | – |
 | **IL2CPP metadata dump** | ✅ | ✅ | – | – | – |
 | Headless CLI | ✅ | ✅ | – | – | – |
 
@@ -161,6 +163,7 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 - **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
 - **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
 - **3D preview** — wireframe + solid mesh viewer with skeleton overlay; Unreal (`.pak`) meshes are texture-mapped using baked base-color textures.
+- **Bethesda (Gamebryo)** — browse and extract `.bsa` / `.ba2` archives (BA2 DX10 textures rebuilt as DDS); NIF meshes render textured in the 3D viewport.
 - **FBX export** — skinned meshes with skeletons, morph targets (BlendShapes) and animation clips, as **FBX 7.4 binary** (verified importing cleanly into Blender 5.2); ASCII still available via `DUALFORGE_FBX_ASCII=1`.
 - **Audio preview** — waveform + inline playback (WAV/OGG/FLAC/raw, vgmstream for `.wem`).
 - **Videos** — `VideoClip` / `MovieTexture` streamed back to their original container (MP4/MOV/WebM/…).
@@ -176,13 +179,13 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 
 ## Supported formats
 
-- **Archives**: Unreal `.pak`, IoStore `.utoc`/`.ucas`, Unity bundles (`.assets`, `.unity3d`, `.bundle`) + stream files, Bethesda BSA/BA2, nested zip / 7z / gzip / zstd / lz4 / lzma.
+- **Archives**: Unreal `.pak`, IoStore `.utoc`/`.ucas`, Unity bundles (`.assets`, `.unity3d`, `.bundle`) + stream files, Bethesda Gamebryo BSA/BA2, nested zip / 7z / gzip / zstd / lz4 / lzma.
 - **Compression**: zlib, gzip, bz2, lzma, LZ4, LZ4HC, Zstandard, Brotli, snappy, Oodle (Kraken/Mermaid/Leviathan), 7z.
 - **Textures**: PNG, JPG, BMP, WebP, TGA, DDS, KTX — via Pillow + pure-Python block decoders.
 - **Cubemaps**: 6-face PNG/JPG/TGA/DDS/KTX per-face export.
 - **Videos**: `VideoClip` / `MovieTexture` → original container (MP4/MOV/WebM/AVI) or raw.
 - **Audio**: WAV, OGG, FLAC, raw — plus vgmstream for `.wem`, `.fsb`, etc.
-- **Meshes**: OBJ, glTF (skinned + skeleton), **FBX (skinned + morph targets)**, USD/USDA.
+- **Meshes**: OBJ, glTF (skinned + skeleton), **FBX (skinned + morph targets)**, USD/USDA; NIF geometry preview for Gamebryo (`.nif`).
 - **Animations**: FBX (default), glTF, JSON keyframe dump.
 - **Asset metadata**: `AnimatorController`, `Avatar`, `LightmapData` → JSON summaries; `SpriteAtlas` → one image per packed sprite.
 - **Text**: JSON, XML, plain text, MonoBehaviour type-tree inspector.
@@ -215,6 +218,15 @@ the GUI (parsed from the bundle/serialized header or the pak footer).
 | Encryption / compression | AES-256 natively, multi-scheme AES/custom via the bridge; Oodle unpacked with the game's own `oo2core_*.dll` (never bundled) |
 | Verified | TEKKEN 8 (UE5, pak v12): 279,410 files / 100 archives; raw + texture + `.wem` extraction, skeletal & static **mesh preview** in the 3D viewport |
 
+### Bethesda (Gamebryo)
+
+| | |
+|---|---|
+| Containers | `.bsa` (v103/104/105) and `.ba2` (GNRL / DX10) via `dualforge/bethesda/archive.py` — `list_files` + extraction, with BA2 DX10 textures rebuilt as DDS |
+| Meshes | `.nif` (NetImmerse / **Gamebryo File Format**, v20.2.0.7 → Skyrim SE) via `dualforge/bethesda/nif.py` — BSTriShape + legacy `NiTriShapeData`/`NiTriStripsData` geometry with diffuse-texture mapping, rendered in the 3D viewport |
+| Variants | Gamebryo → Creation Engine (Skyrim, Fallout 4): same BSA/BA2 + legacy NIF read path |
+| Verified | Skyrim SE head/skin NIF preview; BSA/BA2 round-trip fixtures (`tests/test_bethesda.py`) |
+
 **Known gaps:** `.usmap` files must match the game build (re-dump after updates);
 paks encrypted with fully custom schemes need their keys/scheme configured;
 very old UE1/UE2 paks have no CUE4Parse engine and are best-effort only.
@@ -229,16 +241,18 @@ very old UE1/UE2 paks have no CUE4Parse engine and are best-effort only.
                            ▼
                  [ Engine Detector ]             dualforge/detector  (magic bytes)
                            │
-                 ┌─────────┴─────────┐
-                 ▼                   ▼
-            [ Unity Module ]    [ Unreal Module ]   dualforge/unity, dualforge/unreal
-                 │                   │
-                 └─────────┬─────────┘
                            ▼
-            [ Decompression Core ]               dualforge/compression
-                           │
-                           ▼
-              [ Export / Preview / Audio ]        dualforge/export, dualforge/ui/preview
+ ┌───────────┬───────────┬───────────┬───────────┐
+       ▼           ▼           ▼           ▼
+   [ Unity ]   [ Unreal ]  [ Bethesda ]  [ CDPR ]    dualforge/unity, dualforge/unreal,
+                                                      dualforge/bethesda, dualforge/cdpr
+       │           │           │           │
+       └───────────┴─────┬─────┴───────────┘
+                         ▼
+        [ Decompression Core ]                dualforge/compression
+                         │
+                         ▼
+          [ Export / Preview / Audio ]        dualforge/export, dualforge/ui/preview
 ```
 
 ---

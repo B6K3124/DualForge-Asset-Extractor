@@ -21,6 +21,15 @@ def _cmd_crack_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_verified(verified_keys, label: str = "") -> None:
+    """Print verified keys with their detected scheme (when not plain AES)."""
+    for entry in verified_keys:
+        key = entry.key if hasattr(entry, "key") else entry
+        scheme = getattr(entry, "scheme", "aes-256")
+        tag = f" [{scheme}]" if scheme != "aes-256" else ""
+        print(f"{label}{key}{tag}")
+
+
 def _cmd_crack_run(args: argparse.Namespace) -> int:
     if not args.path:
         print("usage: dualforge crack run <pak-or-folder>", file=sys.stderr)
@@ -54,13 +63,12 @@ def _cmd_crack_run(args: argparse.Namespace) -> int:
         print(f"candidate keys : {len(result['candidates'])}")
         verified = result["verified"]
         print(f"verified keys  : {len(verified)}")
-        for key in verified:
-            print(f"  {key}")
+        vks = result.get("verified_keys") or verified
+        _print_verified(vks)
         if result["status"] == "ok":
-            for key in verified:
-                print(f"cracked key    : {key}")
+            _print_verified(vks, label="cracked key    : ")
             if result["saved"]:
-                print("saved to key store:", ", ".join(result['saved']))
+                print("saved to key store:", ", ".join(result["saved"]))
             else:
                 print("(keys not saved; re-run without --no-save to persist)")
             return 0
@@ -95,13 +103,12 @@ def _cmd_crack_run(args: argparse.Namespace) -> int:
     print(f"candidate keys : {len(result['candidates'])}")
     verified = result["verified"]
     print(f"verified keys  : {len(verified)}")
-    for key in verified:
-        print(f"  {key}")
+    vks = result.get("verified_keys") or verified
+    _print_verified(vks)
     if result["status"] == "ok":
-        for key in verified:
-            print(f"cracked key    : {key}")
+        _print_verified(vks, label="cracked key    : ")
         if result["saved"]:
-            print("saved to key store:", ", ".join(result['saved']))
+            print("saved to key store:", ", ".join(result["saved"]))
         else:
             print("(keys not saved; re-run without --no-save to persist)")
         return 0

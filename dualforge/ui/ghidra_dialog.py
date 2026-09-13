@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import types
@@ -30,11 +31,26 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from dualforge.ghidra.manager import ensure_ghidra, ensure_java, toolchain_status
+
 EXIT_OK = 0
 EXIT_NO_GHIDRA = 3
 EXIT_NO_JAVA = 4
 EXIT_SETUP = 6
 EXIT_ANALYSIS = 7
+
+
+def missing_toolchain(status: dict) -> list[str]:
+    """Names of toolchain pieces missing (or too old) for a key hunt."""
+    missing: list[str] = []
+    if not status.get("ghidra"):
+        missing.append("Ghidra")
+    major = status.get("java_major")
+    if not status.get("java"):
+        missing.append("Java 21")
+    elif major is not None and major < 21:
+        missing.append(f"Java 21 (found Java {major})")
+    return missing
 
 
 def ghidra_script_path() -> Path | None:
@@ -133,12 +149,47 @@ class GhidraWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class ProvisionSignals(QObject):
+    log = Signal(str)
+    done = Signal(object)
+    failed = Signal(str)
+
+
+class ProvisionWorker(QThread):
+    """Download a portable Ghidra + Java 21 into ~/.dualforge and report paths."""
+
+    def __init__(self):
+        super().__init__()
+        self._signals = ProvisionSignals()
+        self.log = self._signals.log
+        self.done = self._signals.done
+        self.failed = self._signals.failed
+
+    def run(self) -> None:
+        try:
+            headless = ensure_ghidra(download=True, log=self.log.emit)
+            java = ensure_java(download=True, log=self.log.emit)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the dialog
+            self.failed.emit(str(exc))
+            return
+        self.done.emit(
+            {
+                "ghidra_home": str(headless.parents[1]) if headless else None,
+                "java": java,
+            }
+        )
+
+
 class GhidraDialog(QDialog):
     def __init__(self, parent=None, default_binary: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("Ghidra Key Hunt")
         self.resize(760, 560)
         self._worker: GhidraWorker | None = None
+        self._provision_worker: ProvisionWorker | None = None
+        self._pending_action: Callable[[], None] | None = None
+        self._provisioned: dict | None = None
+        self._env_backup: dict[str, str | None] = {}
         self._result_json: str | None = None
         self._result_owned = False
         self._close_when_done = False
@@ -185,7 +236,10 @@ class GhidraDialog(QDialog):
 
         buttons = QHBoxLayout()
         self.check_btn = QPushButton("Check Setup")
-        self.check_btn.setToolTip("Diagnose the Ghidra / Java / ghidra-bridge setup")
+        self.check_btn.setToolTip(
+            "Diagnose the Ghidra / Java / ghidra-bridge setup "
+            "(offers to download missing components automatically)"
+        )
         self.check_btn.clicked.connect(self._check_setup)
         buttons.addWidget(self.check_btn)
         self.hunt_btn = QPushButton("Start Key Hunt")
@@ -225,7 +279,9 @@ class GhidraDialog(QDialog):
         layout.addWidget(self.results_table)
 
         self.note_label = QLabel(
-            "Requires a local Ghidra 11.x install and Java 21. The hunt launches "
+            "If Ghidra or Java 21 is missing, DualForge offers to download a "
+            "portable copy (about 500 MB) into ~/.dualforge and sets it up "
+            "automatically - no manual install needed. The hunt launches "
             "headless Ghidra and can take several minutes per binary - the log "
             "shows progress. Checking 'Scan ALL detected binaries' runs the hunt "
             "over every game executable found under the selected folder."
@@ -278,6 +334,12 @@ class GhidraDialog(QDialog):
 
     def _finish(self) -> None:
         self._set_running(False)
+        for key, previous in self._env_backup.items():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+        self._env_backup = {}
         if self._worker is not None:
             self._worker = None
         if self._close_when_done:
@@ -286,7 +348,70 @@ class GhidraDialog(QDialog):
     # ---- actions ----
 
     def _check_setup(self) -> None:
-        self._run_worker(["--check"])
+        self._ensure_toolchain(lambda: self._run_worker(["--check"]))
+
+    def _ensure_toolchain(self, after: Callable[[], None]) -> None:
+        """Run ``after`` once Ghidra + Java 21 are available.
+
+        If anything is missing, ask first: downloading ~500 MB without consent
+        would be rude. Declining falls through to ``after`` unchanged, so the
+        hunt/check still runs and reports what a manual install needs.
+        """
+        if self._provision_worker is not None and self._provision_worker.isRunning():
+            return
+        status = toolchain_status()
+        missing = missing_toolchain(status)
+        if not missing:
+            after()
+            return
+        detail = ", ".join(missing)
+        reply = QMessageBox.question(
+            self,
+            "Ghidra Key Hunt",
+            f"DualForge needs:\n\n  {detail}\n\n"
+            "Download a portable Ghidra 11.x and Java 21 into\n"
+            "~/.dualforge (about 500 MB) and set them up automatically?\n\n"
+            "Choose No to point the hunt at your own install via\n"
+            f"GHIDRA_HOME / JAVA_HOME (cache: {status.get('cache_root', '')}).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            after()
+            return
+        self._pending_action = after
+        self._set_running(True)
+        self.status_label.setText("Downloading Ghidra + Java 21... (network)")
+        self._log("Toolchain missing; downloading a portable Ghidra + JRE into the cache...")
+        worker = ProvisionWorker()
+        worker.log.connect(self._log)
+        worker.done.connect(self._on_provisioned)
+        worker.failed.connect(self._on_provision_failed)
+        worker.finished.connect(self._provision_finished)
+        self._provision_worker = worker
+        worker.start()
+
+    def _on_provisioned(self, paths: dict) -> None:
+        self._provisioned = paths or self._provisioned
+        if not paths:
+            return
+        if paths.get("ghidra_home"):
+            self._log(f"Ghidra ready: {paths['ghidra_home']}")
+        if paths.get("java"):
+            self._log(f"Java ready: {paths['java']}")
+
+    def _on_provision_failed(self, message: str) -> None:
+        self.status_label.setText("Toolchain download failed.")
+        self._log(f"error: {message}")
+        self._log("You can still install Ghidra 11.x + Java 21 manually and set GHIDRA_HOME.")
+        self._pending_action = None
+
+    def _provision_finished(self) -> None:
+        action = self._pending_action
+        self._pending_action = None
+        self._set_running(False)
+        if action is not None:
+            action()
 
     def _start_hunt(self) -> None:
         if self.scan_all_check.isChecked():
@@ -301,13 +426,11 @@ class GhidraDialog(QDialog):
             return
         argv = self._hunt_argv(binary)
         fd, json_path = tempfile.mkstemp(prefix="dualforge_ghidra_", suffix=".keys.json")
-        import os
-
         os.close(fd)
         self._result_json = json_path
         self._result_owned = True
         argv += ["--json", json_path]
-        self._run_worker(argv)
+        self._ensure_toolchain(lambda: self._run_worker(list(argv)))
 
     def _start_all_hunt(self) -> None:
         from dualforge.unreal.autodetect import find_game_executable
@@ -332,8 +455,6 @@ class GhidraDialog(QDialog):
 
         tasks: list[list[str]] = []
         json_paths: list[str] = []
-        import os
-
         for binary, _score in ranked:
             fd, json_path = tempfile.mkstemp(prefix="dualforge_ghidra_", suffix=".keys.json")
             os.close(fd)
@@ -342,7 +463,7 @@ class GhidraDialog(QDialog):
         self._log(f"Scanning {len(tasks)} detected executable(s) under {folder}")
         self._result_json = json_paths
         self._result_owned = True
-        self._run_worker([], tasks=tasks)
+        self._ensure_toolchain(lambda: self._run_worker([], tasks=tasks))
 
     def _hunt_argv(self, binary: str) -> list[str]:
         argv = [
@@ -363,6 +484,21 @@ class GhidraDialog(QDialog):
     def _run_worker(self, argv: list[str], tasks: list[list[str]] | None = None) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
+        if self._provision_worker is not None and self._provision_worker.isRunning():
+            return
+        argv = list(argv)
+        tasks = [list(task) for task in tasks] if tasks else None
+        if self._provisioned and self._provisioned.get("ghidra_home"):
+            home_arg = ["--ghidra-home", str(self._provisioned["ghidra_home"])]
+            if "--ghidra-home" not in argv:
+                argv = home_arg + argv
+            if tasks:
+                tasks = [home_arg + task for task in tasks]
+        self._env_backup = {}
+        if self._provisioned and self._provisioned.get("java"):
+            jre_root = str(Path(self._provisioned["java"]).parent.parent)
+            self._env_backup["JAVA_HOME"] = os.environ.get("JAVA_HOME")
+            os.environ["JAVA_HOME"] = jre_root
         self.results_table.setVisible(False)
         self.results_label.setVisible(False)
         self.log_view.clear()
@@ -439,8 +575,6 @@ class GhidraDialog(QDialog):
 
     def _cleanup_result(self) -> None:
         if self._result_owned and self._result_json:
-            import os
-
             paths = (
                 self._result_json
                 if isinstance(self._result_json, list)
@@ -452,8 +586,13 @@ class GhidraDialog(QDialog):
             self._result_json = None
             self._result_owned = False
 
+    def _busy(self) -> bool:
+        return (
+            self._worker is not None and self._worker.isRunning()
+        ) or (self._provision_worker is not None and self._provision_worker.isRunning())
+
     def _close(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._busy():
             self._close_when_done = True
             self.setVisible(False)
             return
@@ -461,7 +600,7 @@ class GhidraDialog(QDialog):
         self.accept()
 
     def closeEvent(self, event) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._busy():
             self._close_when_done = True
             self.setVisible(False)
             event.ignore()

@@ -1,8 +1,8 @@
 # DualForge User Guide
 
 **DualForge** is a desktop tool for browsing, previewing, and extracting game assets
-from **Unity** and **Unreal** archives. This guide covers installing and using the
-current build, step by step.
+from **Unity**, **Unreal**, and **Bethesda Gamebryo** archives. This guide covers
+installing and using the current build, step by step.
 
 > The latest build always supersedes older instructions. When in doubt, follow the
 > "Install the build" section below — especially the part about **which `.exe` is the
@@ -57,8 +57,8 @@ right-click → **Create shortcut** and put the shortcut anywhere.
 
 1. Launch `DualForge.exe`.
 2. Click **Open Archive...** (or press `Ctrl+O`) and pick a game archive:
-   `.pak` (Unreal), `.utoc`/`.ucas` (Unreal IoStore), or Unity
-   `.unity3d` / `.bundle` / `.assets` / `.assetbundle`.
+   `.pak` (Unreal), `.utoc`/`.ucas` (Unreal IoStore), Bethesda Gamebryo
+   `.bsa` / `.ba2`, or Unity `.unity3d` / `.bundle` / `.assets` / `.assetbundle`.
    You can also **drag & drop** a file onto the window, or use **File ▸ Open Folder**
    to scan an entire game directory (recursive, up to 4 levels).
 3. Browse the asset tree on the left. Use the **search box** (`Ctrl+F`) and the
@@ -135,6 +135,7 @@ Selecting an asset loads a preview automatically (in a background thread):
 | `.wav` / `.ogg` / `.flac` and exotic Unreal audio (`.wem`, `.fsb`, …) | Same audio page — exotic formats need **vgmstream** (§7) |
 | Mesh (Unity) | 3D viewer — **Wireframe** toggle, **Reset view**, drag to orbit; skinned meshes also render the **skeleton** (bones + joints) |
 | Mesh (Unreal) | Same 3D viewer; geometry carries UVs, and **base-color textures are baked into the preview GLB** and mapped onto the surface (`DUALFORGE_MESH_TEXTURES=0` disables the texture bake) |
+| Mesh (Bethesda NIF) | Gamebryo/NetImmerse `.nif` (Skyrim SE v20.2.0.7) rendered in the 3D viewer, **diffuse-texture mapped** (BSTriShape + legacy `NiTriShapeData`/`NiTriStripsData`) |
 | AnimationClip (Unity) | Track summary (position/rotation/scale keyframes per node) |
 | TextAsset | Pretty-printed JSON/XML/text viewer |
 | Anything else | Hex inspector (first 256 KB shown) |
@@ -251,7 +252,9 @@ repositories (defaults: FortniteCentral, aes.ue4server.com — editable in Setti
 ### 5.4 Automated Ghidra key hunt (find keys yourself)
 
 If a key is not in any list and you own the game binary, DualForge can scan it for
-AES S-box signatures and high-entropy 32-byte hex keys:
+AES S-box signatures and high-entropy 32-byte hex keys. Missing Ghidra/Java is no
+longer a blocker: **Check Setup** (and the hunt itself) offers to download a
+portable Ghidra 11.x + Java 21 into `~/.dualforge` automatically (about 500 MB).
 
 **From the GUI (recommended):** **Tools ▸ Ghidra Key Hunt...**
 
@@ -259,7 +262,9 @@ AES S-box signatures and high-entropy 32-byte hex keys:
 
 1. Click **Browse...** and pick the game `.exe` / `.dll`.
 2. (Optional) tweak the entropy threshold and how many candidate keys to store.
-3. Click **Check Setup** first — it verifies Ghidra, Java, and the bridge.
+3. Click **Check Setup** first. If Ghidra or Java is missing, confirm the
+   auto-download when asked (or choose **No** and point it at your own install
+   with `GHIDRA_HOME` / `JAVA_HOME`). It then verifies Ghidra, Java, and the bridge.
 4. Click **Start Key Hunt** and watch the live log. This can take several minutes.
 5. The best candidates are added to the key store automatically as
    `"<game> [ghidra-N]"` and are tried automatically the next time you open the pak.
@@ -293,7 +298,9 @@ python main.py crack run "C:\Game" --all-binaries   # scan every detected execut
 python main.py crack status                         # toolchain readiness
 ```
 
-**Prerequisites:** Ghidra 11.x (set `GHIDRA_HOME` or add it to `PATH`) and **Java 21**.
+**Prerequisites:** none to get started — the GUI auto-downloads a portable Ghidra
+11.x + Java 21 into `~/.dualforge/ghidra` on request. To use your own install
+instead, set `GHIDRA_HOME` (or add Ghidra to `PATH`) and Java 21 to `PATH`/`JAVA_HOME`.
 `ghidra-bridge` is installed automatically on first run (source installs only — for
 the frozen build, install it into the same Python environment used to build).
 

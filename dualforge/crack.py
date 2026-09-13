@@ -5,7 +5,9 @@ Wires together the existing key hunting toolchain:
 1. Auto-detect the game's main executable from a pak/install folder.
 2. Provision Ghidra + JRE (download on demand when allowed).
 3. Run the static Ghidra key hunt against the binary.
-4. Validate every candidate key against a real pak from the game.
+4. Validate every candidate key against a real pak from the game, probing
+   every known scheme pipeline (plain AES, then per-game presets) so wrapped
+   schemes like ``aes-256 + xor8`` verify too.
 5. Persist the winning key(s) to the DualForge key store.
 
 The orchestration is dependency-light: it shells out to the existing
@@ -21,10 +23,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from dualforge.encryption.brute import probe_pak_blocks, validate_key
+from dualforge.encryption.presets import PRESETS, GameScheme, guess_scheme
+from dualforge.encryption.registry import list_schemes
 from dualforge.unreal.autodetect import find_game_executable, find_install_root
 from dualforge.unreal.keys import KeyStore
 
@@ -106,9 +111,73 @@ def extract_candidate_keys(json_path: str | None, limit: int = 64) -> list[str]:
     return keys
 
 
-def validate_keys_against_pak(pak_path: str, keys: list[str], block_count: int = 16, scheme: str = "aes-256") -> list[str]:
-    """Return the subset of ``keys`` that successfully decrypt the pak index."""
-    verified: list[str] = []
+@dataclass
+class VerifiedKey:
+    """A candidate key that successfully decrypted a real pak block."""
+
+    key: str = ""
+    scheme: str = "aes-256"
+    parameters: dict[str, str] = field(default_factory=dict)
+    game: str = ""
+
+
+# Stage names that cannot confirm a key on their own (they defer to the reader)
+# and are therefore never probed during scheme-aware validation.
+_NON_KEYED_STAGES = {"partial-encrypt"}
+
+
+def pak_probe_schemes(pak_name: str = "", game: str = "") -> list[tuple[str, str, dict]]:
+    """Ordered ``(preset_name, pipeline_scheme, default_params)`` probes.
+
+    ``pipeline_scheme`` is the registry-resolvable stage string (e.g.
+    ``aes-256+xor8``) passed to ``validate_key``; ``preset_name`` is the label
+    stored on the key (matches the CUE4Parse game mapping). The per-game preset
+    goes first (most specific diagnosis), then the rest of the preset table with
+    duplicates collapsed by stage signature - Delta Force and Marvel Rivals
+    (both ``aes-256 + xor8``) become a single probe. Any self-registered scheme
+    names that no preset covers are appended afterwards.
+    """
+    guessed = guess_scheme(archive_name=pak_name, game=game)
+    ordered: list[tuple[str, str, tuple[str, ...], dict]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def push(preset: GameScheme) -> None:
+        stages = tuple(s for s in preset.stages if s not in _NON_KEYED_STAGES)
+        if not stages or stages in seen:
+            return
+        seen.add(stages)
+        ordered.append((preset.name, "+".join(stages), stages, dict(preset.default_params)))
+
+    if guessed:
+        push(guessed)
+    for preset in PRESETS:
+        push(preset)
+
+    covered: set[str] = set().union(*seen)
+    probes = [(name, pipeline, params) for name, pipeline, _stages, params in ordered]
+    probe_names = {name for name, _, _ in probes}
+    for name in list_schemes():
+        if name not in probe_names and name not in covered and name not in _NON_KEYED_STAGES:
+            probes.append((name, name, {}))
+    return probes
+
+
+def validate_keys_against_pak(
+    pak_path: str,
+    keys: list[str],
+    block_count: int = 16,
+    scheme: str | None = None,
+    game: str = "",
+) -> list[VerifiedKey]:
+    """Return the subset of ``keys`` that decrypt a pak index block.
+
+    Each unique candidate is tried against every known scheme pipeline (per-game
+    preset first, then all others, then any self-registered schemes); the first
+    pipeline that decrypts a probed block to the Unreal magic wins and is
+    reported with the key. Pass an explicit ``scheme`` to restrict probing to a
+    single pipeline (e.g. for the interactive ``keys test`` diagnostics).
+    """
+    verified: list[VerifiedKey] = []
     with open(pak_path, "rb") as fh:
         # read enough of the file (tail) to locate index blocks
         size = fh.seek(0, 2)
@@ -118,15 +187,23 @@ def validate_keys_against_pak(pak_path: str, keys: list[str], block_count: int =
     blocks = probe_pak_blocks(raw, count=block_count)
     if not blocks:
         return verified
-    name = Path(pak_path).name
+    pak_name = Path(pak_path).name
+    if scheme:
+        probes: list[tuple[str, str, dict]] = [(scheme, scheme, {})]
+    else:
+        probes = pak_probe_schemes(pak_name=pak_name, game=game)
     for key in dict.fromkeys(keys):
-        hits = sum(
-            1
-            for block in blocks
-            if validate_key(block, scheme, key, name)
-        )
-        if hits:
-            verified.append(key)
+        for probe_name, pipeline, params in probes:
+            if any(
+                validate_key(
+                    block, pipeline, key, archive_name=pak_name, parameters=params
+                )
+                for block in blocks
+            ):
+                verified.append(
+                    VerifiedKey(key=key, scheme=probe_name, parameters=params, game=game)
+                )
+                break
     return verified
 
 
@@ -175,16 +252,26 @@ def crack(
         candidates = extract_candidate_keys(json_path)
     finally:
         _cleanup_hunt_json(json_path)
-    verified = validate_keys_against_pak(pak, candidates, block_count=block_count)
+    verified_keys = validate_keys_against_pak(
+        pak, candidates, block_count=block_count, game=Path(exe).stem
+    )
+    verified = [vk.key for vk in verified_keys]
 
     saved: list[str] = []
-    if save_keys and verified:
+    if save_keys and verified_keys:
         store = KeyStore()
         base_title = title or Path(exe).stem
-        for index, key in enumerate(verified, start=1):
+        for index, vk in enumerate(verified_keys, start=1):
             entry_title = f"{base_title} [cracked-{index}]"
             try:
-                store.add(entry_title, key, engine="unreal", notes="auto-cracked via Ghidra")
+                store.add(
+                    entry_title,
+                    vk.key,
+                    engine="unreal",
+                    notes="auto-cracked via Ghidra",
+                    scheme=vk.scheme,
+                    parameters=vk.parameters or None,
+                )
                 saved.append(entry_title)
             except ValueError:
                 continue
@@ -195,6 +282,7 @@ def crack(
         "pak": pak,
         "candidates": candidates,
         "verified": verified,
+        "verified_keys": verified_keys,
         "saved": saved,
     }
 
@@ -283,22 +371,30 @@ def crack_all(
 
     # 5. Validate the combined candidate list against the real pak.
     _emit(f"validating {len(all_candidates)} unique candidate(s) against the pak...")
-    verified = validate_keys_against_pak(pak, all_candidates, block_count=block_count)
+    verified_keys = validate_keys_against_pak(
+        pak,
+        all_candidates,
+        block_count=block_count,
+        game=Path(pak_or_folder).stem,
+    )
+    verified = [vk.key for vk in verified_keys]
     _emit(f"{len(verified)} key(s) verified")
 
     # 6. Save verified keys.
     saved: list[str] = []
-    if save_keys and verified:
+    if save_keys and verified_keys:
         store = KeyStore()
         base_title = title or Path(pak_or_folder).stem
-        for index, key in enumerate(verified, start=1):
+        for index, vk in enumerate(verified_keys, start=1):
             entry_title = f"{base_title} [cracked-{index}]"
             try:
                 store.add(
                     entry_title,
-                    key,
+                    vk.key,
                     engine="unreal",
                     notes="auto-cracked via Ghidra (multi-binary scan)",
+                    scheme=vk.scheme,
+                    parameters=vk.parameters or None,
                 )
                 saved.append(entry_title)
             except ValueError:
@@ -310,6 +406,7 @@ def crack_all(
         "scanned": [r["exe"] for r in hunt_results],
         "candidates": all_candidates,
         "verified": verified,
+        "verified_keys": verified_keys,
         "saved": saved,
         "hunt_results": hunt_results,
     }

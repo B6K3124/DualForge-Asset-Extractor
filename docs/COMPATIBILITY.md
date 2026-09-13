@@ -7,10 +7,11 @@
         |
 [ Engine Router / Detector ]          dualforge/detector  (magic bytes)
         |
-   +----+----+
-   |         |
-[ Unity ] [ Unreal ]                  dualforge/unity, dualforge/unreal
-   |         |
+   +----+----+----+----+
+   |         |         |         |
+[ Unity ] [ Unreal ] [ Bethesda ] [ CDPR ]   dualforge/unity, dualforge/unreal,
+                                             dualforge/bethesda, dualforge/cdpr
+   |         |         |         |
 [ Decompression Core ]                dualforge/compression (zlib/gzip/bz2/lzma/
                                        lz4/zstd/brotli/oodle-ctypes/7z)
 [ Export / Audio ]                    dualforge/export, dualforge/audio
@@ -39,6 +40,8 @@
 | Unity | `.resS` / `.resource` / `.split*` sibling streams | eager pre-load into the UnityPy environment (`UnityArchive.load_sibling_streams`) | ✔ tests/test_unlock.py |
 | Audio (any) | WEM/FSB/OGG/XMA/ADPCM/... | vgmstream (subprocess), `.wem`-style preview sniffing | — (raw `.wem` extraction from real paks verified on TEKKEN 8; conversion needs vgmstream, not installed) |
 | Containers | zip / 7z / gzip / zstd / lz4 / lzma | dualforge/compression | — |
+| Bethesda (Gamebryo) | `.bsa` v103/104/105, `.ba2` GNRL/DX10 | `dualforge/bethesda/archive.py` (native reader: `list_files` / extract; BA2 DX10 textures rebuilt as DDS via `build_dds`) | ✔ tests/test_bethesda.py (writer round-trips `dualforge/bethesda/writer.py`) |
+| Bethesda (Gamebryo) | `.nif` mesh preview (NetImmerse / "Gamebryo File Format") | `dualforge/bethesda/nif.py` — v20.2.0.7 (Skyrim SE): BSTriShape skin/bound geometry + legacy `NiTriShapeData` / `NiTriStripsData`, diffuse texture via `BSLightingShaderProperty -> BSShaderTextureSet` | ✔ real Skyrim SE head/skin previews in the 3D viewport (textured) |
 
 Engine versions are surfaced in the GUI (properties + preview meta: "Unity version", "Serialized format"; native pak version on the badge). Assets whose serialized format is too new for UnityPy to decode fall back to a type-tree JSON read instead of failing the preview, and per-asset extraction errors are isolated so one bad asset never aborts the run.
 

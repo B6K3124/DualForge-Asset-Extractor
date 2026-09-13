@@ -236,6 +236,26 @@ def test_add_to_keystore_none_when_no_32_byte(monkeypatch):
 # ------------------------------------------------------------------- CLI
 
 
+def test_find_analyze_headless_from_managed_cache(monkeypatch, tmp_path):
+    support = tmp_path / "ghidra_11.3.2_PUBLIC" / "support"
+    support.mkdir(parents=True)
+    headless = support / "analyzeHeadless.bat"
+    headless.touch()
+    monkeypatch.setattr(gkf, "CACHE_DIR", tmp_path)
+    monkeypatch.delenv("GHIDRA_HOME", raising=False)
+    assert gkf.find_analyze_headless() == headless
+
+
+def test_find_java_from_managed_cache(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "jre21" / "bin"
+    bin_dir.mkdir(parents=True)
+    java = bin_dir / "java.exe"
+    java.touch()
+    monkeypatch.setattr(gkf, "CACHE_DIR", tmp_path)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
+    assert gkf.find_java() == str(java)
+
+
 def test_build_parser_defaults():
     parser = gkf.build_parser()
     args = parser.parse_args(["game.exe"])

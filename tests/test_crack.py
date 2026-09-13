@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from dualforge.crack import (
+    VerifiedKey,
     crack_all,
     extract_candidate_keys,
     find_validation_pak,
@@ -107,15 +108,15 @@ def test_extract_candidate_keys_missing_or_invalid(tmp_path):
 def test_validate_keys_against_pak_dedupes_and_uses_validate(monkeypatch, tmp_path):
     pak = tmp_path / "game.pak"
     pak.write_bytes(b"\x00" * 2048)
-    calls = {}
+    calls: dict = {"probe": None, "keys": []}
 
     def fake_probe(raw, count=16):
         calls["probe"] = raw
         return [b"A" * 16, b"B" * 16]
 
     def fake_validate(block, scheme, key, archive_name="", guid="", parameters=None):
-        calls.setdefault("keys", []).append(key)
-        return key == "11" * 32
+        calls.setdefault("keys", []).append((scheme, key))
+        return scheme == "aes-256" and key == "11" * 32
 
     monkeypatch.setattr("dualforge.crack.probe_pak_blocks", fake_probe)
     monkeypatch.setattr("dualforge.crack.validate_key", fake_validate)
@@ -123,10 +124,38 @@ def test_validate_keys_against_pak_dedupes_and_uses_validate(monkeypatch, tmp_pa
     verified = validate_keys_against_pak(
         str(pak), ["11" * 32, "22" * 32, "11" * 32]
     )
-    assert verified == ["11" * 32]
-    # 2 unique keys validated, each against 2 blocks
-    assert sorted(set(calls["keys"])) == ["11" * 32, "22" * 32]
-    assert len(calls["keys"]) == 4
+    assert [v.key for v in verified] == ["11" * 32]
+    assert verified[0].scheme == "aes-256"
+    # Dedup: the winning key matches plain AES on its very first block; the
+    # losing key is tried on both blocks before other schemes are probed.
+    assert [k for s, k in calls["keys"] if s == "aes-256"] == [
+        "11" * 32,
+        "22" * 32,
+        "22" * 32,
+    ]
+    # The scheme-aware probe went beyond plain AES (per-game presets included).
+    schemes = sorted({s for s, _ in calls["keys"]})
+    assert len(schemes) > 1
+    assert "derived-aes-md5" in schemes
+
+
+def test_validate_keys_against_pak_restricts_scheme(monkeypatch, tmp_path):
+    pak = tmp_path / "game.pak"
+    pak.write_bytes(b"\x00" * 2048)
+    schemes: list[str] = []
+
+    def fake_probe(raw, count=16):
+        return [b"A" * 16]
+
+    def fake_validate(block, scheme, key, archive_name="", guid="", parameters=None):
+        schemes.append(scheme)
+        return False
+
+    monkeypatch.setattr("dualforge.crack.probe_pak_blocks", fake_probe)
+    monkeypatch.setattr("dualforge.crack.validate_key", fake_validate)
+
+    assert validate_keys_against_pak(str(pak), ["11" * 32], scheme="aes-256") == []
+    assert set(schemes) == {"aes-256"}
 
 
 def test_validate_keys_against_pak_no_blocks(monkeypatch, tmp_path):
@@ -138,6 +167,31 @@ def test_validate_keys_against_pak_no_blocks(monkeypatch, tmp_path):
 
     monkeypatch.setattr("dualforge.crack.probe_pak_blocks", fake_probe)
     assert validate_keys_against_pak(str(pak), ["11" * 32]) == []
+
+
+def test_pak_probe_schemes_always_includes_aes_and_more():
+    from dualforge.crack import pak_probe_schemes
+
+    probes = pak_probe_schemes(pak_name="pakchunk0-WindowsNoEditor.pak")
+    names = [name for name, _scheme, _params in probes]
+    assert names[0] == "aes-256"
+    assert len(names) > 1
+    assert "delta-force" in names or "marvel-rivals" in names
+    assert "wuthering-waves" not in names
+
+
+def test_pak_probe_schemes_guessed_game_first():
+    from dualforge.crack import pak_probe_schemes
+
+    probes = pak_probe_schemes(game="DeltaForce")
+    name, scheme_string, params = probes[0]
+    assert name == "delta-force"
+    assert scheme_string == "aes-256+xor8"
+    assert params == {}
+    # aes+xor8 appears exactly once despite Delta Force / Marvel Rivals sharing it
+    names = [n for n, _s, _p in probes]
+    signature = names.count("delta-force") + names.count("marvel-rivals")
+    assert signature == 1
 
 
 class _FakeJsonResult:
@@ -190,14 +244,16 @@ def test_crack_all_scans_every_binary_and_dedupes(monkeypatch, tmp_path):
     monkeypatch.setattr(
         crack_module,
         "validate_keys_against_pak",
-        lambda pak, keys, block_count=16: ["22" * 32],
+        lambda pak, keys, block_count=16, scheme=None, game="": [
+            VerifiedKey(key="22" * 32, scheme="aes-256", game="")
+        ],
     )
 
     class FakeStore:
         def __init__(self):
             self.entries = []
 
-        def add(self, title, key, engine="", notes=""):
+        def add(self, title, key, engine="", notes="", scheme="aes-256", parameters=None):
             self.entries.append(title)
 
     monkeypatch.setattr(crack_module, "KeyStore", FakeStore)
