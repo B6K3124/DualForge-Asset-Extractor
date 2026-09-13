@@ -265,7 +265,9 @@ portable Ghidra 11.x + Java 21 into `~/.dualforge` automatically (about 500 MB).
 3. Click **Check Setup** first. If Ghidra or Java is missing, confirm the
    auto-download when asked (or choose **No** and point it at your own install
    with `GHIDRA_HOME` / `JAVA_HOME`). It then verifies Ghidra, Java, and the bridge.
-4. Click **Start Key Hunt** and watch the live log. This can take several minutes.
+4. Click **Start Key Hunt** and watch the live log. The scan reads raw bytes
+   (skipping Ghidra's full disassembly), so this is usually quick even for
+   large binaries.
 5. The best candidates are added to the key store automatically as
    `"<game> [ghidra-N]"` and are tried automatically the next time you open the pak.
 
@@ -279,7 +281,8 @@ portable Ghidra 11.x + Java 21 into `~/.dualforge` automatically (about 500 MB).
    hunts each one in turn; the log shows per-binary progress.
 4. Candidate keys from **all** binaries are collected, deduplicated, and written
    to the key store as `"<binary> [ghidra-N]"`, so the correct `.exe` never has
-   to be located manually. Note this takes a few minutes per binary.
+   to be located manually. Each binary takes about a minute (plus fixed Ghidra
+   startup overhead) — the raw-byte scan skips full disassembly.
 
 **From the command line:**
 
@@ -297,6 +300,33 @@ python main.py crack run "C:\Game"                  # scan the top-scored execut
 python main.py crack run "C:\Game" --all-binaries   # scan every detected executable
 python main.py crack status                         # toolchain readiness
 ```
+
+**Validation is scheme-aware.** The key hunt finds raw AES candidates; the
+validation step then tries each candidate against **every known encryption
+pipeline**, in order: plain AES-256 first, then the matched per-game preset
+(e.g. `delta-force` AES+XOR, `snowbreak` derived AES, custom round keys),
+then any remaining registered schemes (presets that share a pipeline are only
+probed once, and `partial-encrypt` is skipped since it has no plaintext-magic
+block). A candidate only counts as verified if a pak block actually decrypts to
+the Unreal magic. Verified keys are saved **tagged with the scheme that worked**
+and appear in the CLI output:
+
+```text
+cracked key    : 012345...cdef [delta-force]
+```
+
+The validation pak is chosen automatically from the game folder — media archives
+(`*video*`, `*movie*`, `*cinematic*`, `*trailer*`) are skipped so the key is
+tested against index-encrypted content, and a media-only folder falls back to
+those.
+
+**The hunt itself is fast.** The scan only reads raw bytes from memory
+(S-box signatures + high-entropy keys), so the Ghidra headless run skips
+full disassembly (`-noanalysis`) — a large shipping exe (e.g. 180 MB) is
+scanned in minutes instead of timing out. If a hunt still times out, the error
+includes the tail of Ghidra's headless log so you can see why. Games that have
+no static key (e.g. Riot's Teamfight Tactics) simply report `no valid key` —
+DualForge never guesses.
 
 **Prerequisites:** none to get started — the GUI auto-downloads a portable Ghidra
 11.x + Java 21 into `~/.dualforge/ghidra` on request. To use your own install
@@ -429,7 +459,7 @@ taken from — re-dump after a game update.
 | Archive won't open / encrypted | Add the decryption key (File ▸ Manage Keys, pick the right scheme), import an FModel JSON, verify it with `keys test`, or run the Ghidra key hunt (Tools ▸ Ghidra Key Hunt) |
 | Exotic audio has no sound | Install **vgmstream** and set it in Settings; without it only WAV/OGG/FLAC preview |
 | 3D mesh viewer empty | OpenGL unavailable — the mesh page shows a message; mesh **export** still works |
-| Ghidra hunt fails | Run **Check Setup** in the dialog; install Ghidra 11.x + Java 21 and set `GHIDRA_HOME` |
+| Ghidra hunt fails | Run **Check Setup** in the dialog; install Ghidra 11.x + Java 21 and set `GHIDRA_HOME`. If it times out on a large binary, the error shows the tail of Ghidra's headless log — the scan is already skipping auto-analysis, so long hunts usually mean a missing/old Ghidra bridge |
 | `FNamePool anchor not found (is this a UE5 game?)` | The process is not a UE5 game, or you picked the wrong one — see §6.4 |
 | `OpenProcess failed (run as admin)` | The game blocks memory access — start DualForge as administrator |
 | USMAP dump found no game / wrong game | Start the game first, then use **Tools ▸ Generate USMAP**, or `usmap dump --list-processes` to find the exact executable name |
@@ -493,6 +523,11 @@ python main.py keys test "game.pak" --aes 0x... --scheme aes-256
 python main.py keys import "C:\FModel\Output\Global.AESKeys.json"
 python main.py keys sync
 python main.py codecs
+
+# Auto-crack: hunt the exe, validate candidates against all schemes, save verified keys
+python main.py crack run "C:\Game"                  # scan the top-scored executable
+python main.py crack run "C:\Game" --all-binaries   # scan every detected executable
+python main.py crack status                         # toolchain readiness
 
 # USMAP tools (Unreal Engine games only)
 python main.py usmap dump --list-processes                 # list running processes

@@ -532,6 +532,10 @@ class GhidraSession:
             "dfproj",
             "-import",
             str(self.binary),
+            # The hunt only streams raw memory bytes (signature/entropy scans);
+            # it never uses disassembly, so skip Ghidra's (very slow) auto
+            # analysis. This keeps multi-hundred-MB shipping binaries tractable.
+            "-noanalysis",
             "-scriptPath",
             str(self.work_dir),
         ]
@@ -587,8 +591,10 @@ class GhidraSession:
                     last_error = exc
                     time.sleep(2.0)
             time.sleep(2.0)
+        _, tail = self._collect_tail()
         raise TimeoutError(
-            f"timed out waiting for the Ghidra bridge ({timeout}s); last error: {last_error}"
+            f"timed out waiting for the Ghidra bridge ({timeout}s); last error: {last_error}; "
+            f"headless log tail:\n{tail}"
         )
 
     @staticmethod

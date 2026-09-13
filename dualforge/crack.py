@@ -35,6 +35,10 @@ from dualforge.unreal.keys import KeyStore
 
 _HUNT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ghidra" / "ghidra_key_finder.py"
 
+# Pak names that are usually media, not index-encrypted content (accepted only
+# as a last resort so auto-cracks validate against a real data archive).
+_MEDIA_PAK_FRAGMENTS = ("video", "movie", "cinematic", "trailer")
+
 
 def find_validation_pak(pak_or_folder: str) -> str:
     """Return a pak to validate candidate keys against."""
@@ -43,16 +47,23 @@ def find_validation_pak(pak_or_folder: str) -> str:
         return str(candidate)
     root = find_install_root(pak_or_folder)
     best: tuple[str, int] | None = None
+    fallback: tuple[str, int] | None = None
     for pak in root.rglob("*.pak"):
         # skip tiny patch paks; prefer a full archive but any is fine
-        if best is None:
-            best = (str(pak), 0)
         try:
             size = pak.stat().st_size
         except OSError:
             size = 0
-        if size > (best[1] if best else 0):
-            best = (str(pak), size)
+        is_media = any(f in pak.name.lower() for f in _MEDIA_PAK_FRAGMENTS)
+        slot = fallback if is_media else best
+        if slot is None or size > slot[1]:
+            entry = (str(pak), size)
+            if is_media:
+                fallback = entry
+            else:
+                best = entry
+    if best is None:
+        best = fallback
     if best is None:
         raise RuntimeError(f"no .pak found under {root}")
     return best[0]

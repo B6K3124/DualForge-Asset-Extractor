@@ -69,6 +69,7 @@ dist\DualForge.exe      # from the build
 | Save and reload game sessions | **File ▸ Game Profiles** |
 | Add / import / sync AES keys | **File ▸ Manage Keys** or **Settings** |
 | Find keys in a game binary | **Tools ▸ Ghidra Key Hunt** |
+| Auto-crack a game (hunt → validate → save) | `python main.py crack run "C:\Game"` |
 | View per-type file statistics | **View ▸ Asset Statistics** |
 | Switch dark / light theme | **View ▸ Theme** |
 | Configure export formats (PNG/JPG/DDS/glTF/FBX/USD/JSON/video…) | **File ▸ Settings** |
@@ -108,6 +109,12 @@ python main.py keys test "game.pak" --aes 0x...
 python main.py keys import "Global.AESKeys.json"
 python main.py keys sync
 
+# Auto-crack: hunt the game binary for AES keys, validate against a real pak,
+# and save only the keys that actually decrypt it (tagged with the scheme used)
+python main.py crack run "C:\Game"                  # top-scored executable
+python main.py crack run "C:\Game" --all-binaries   # every detected executable
+python main.py crack status                         # toolchain readiness
+
 # Generate a mappings file from a running game
 python main.py usmap dump --process "Game.exe" -o game.usmap
 
@@ -139,7 +146,7 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 | Oodle decompression | ✅ | ✅ | – | – | – |
 | Multi-scheme AES + custom encryption | ✅ | AES | – | – | – |
 | Generate `.usmap` from running game | ✅ | – | – | – | – |
-| Ghidra key hunt | ✅ | – | – | – | – |
+| Ghidra key hunt + scheme-aware auto-crack | ✅ | – | – | – | – |
 | Mesh / audio / texture / text previews | ✅ | partial | ✅ | ✅ | limited |
 | Skeleton + animation export (glTF / FBX) | ✅ | ✅ | ✅ | ✅ | limited |
 | Cubemaps / VideoClips / SpriteAtlases / Animators / Avatars | ✅ | – | – | ✅ | limited |
@@ -159,6 +166,7 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 
 - **Any format** — `.pak`, `.utoc`/`.ucas`, `.assets`, `.unity3d`, `.bundle`, and more — auto-detected by magic bytes.
 - **Encrypted archives** — multi-key AES with per-game scheme support; keys from manual entry, FModel import, or community sync.
+- **Ghidra auto-crack** — `crack run` hunts a game binary for hardcoded AES keys (portable Ghidra + Java auto-provisioned on demand), validates candidates against **every known encryption scheme**, and saves only the keys that actually decrypt a pak — tagged with the detected scheme.
 - **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
 - **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
 - **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).

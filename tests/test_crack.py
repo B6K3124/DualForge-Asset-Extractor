@@ -42,6 +42,27 @@ def test_find_validation_pak_prefers_largest_in_tree(tmp_path):
     assert find_validation_pak(str(root)) == str(nested / "main.pak")
 
 
+def test_find_validation_pak_skips_media_paks(tmp_path):
+    root = tmp_path / "Game"
+    nested = root / "Content" / "Paks"
+    nested.mkdir(parents=True)
+    videos = nested / "pakchunk2-videos1080-WindowsClient.pak"
+    videos.write_bytes(b"\x00" * 4400)
+    content = nested / "pakchunk1-WindowsClient.pak"
+    content.write_bytes(b"\x00" * 1200)
+    assert find_validation_pak(str(root)) == str(content)
+
+
+def test_find_validation_pak_falls_back_to_media_only(tmp_path):
+    nested = tmp_path / "Content" / "Paks"
+    nested.mkdir(parents=True)
+    big_video = nested / "pakchunk-movies-WindowsNoEditor.pak"
+    big_video.write_bytes(b"\x00" * 900)
+    small_video = nested / "pakchunk-trailer.pak"
+    small_video.write_bytes(b"\x00" * 100)
+    assert find_validation_pak(str(tmp_path)) == str(big_video)
+
+
 def test_cleanup_hunt_json_ignores_foreign_dirs(tmp_path):
     from dualforge.crack import _cleanup_hunt_json
 
