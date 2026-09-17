@@ -73,6 +73,7 @@ dist\DualForge.exe      # from the build
 | View per-type file statistics | **View ▸ Asset Statistics** |
 | Switch dark / light theme | **View ▸ Theme** |
 | Configure export formats (PNG/JPG/DDS/glTF/FBX/USD/JSON/video…) | **File ▸ Settings** |
+| Check for & install updates | Toolbar **Update** or **Help ▸ Check for Updates...** |
 
 ### CLI
 
@@ -132,6 +133,11 @@ python main.py repack font   "game_Data\sharedassets0.assets" "title"  "title.tt
 # Locales: dump to JSON, edit entries, write back
 python main.py locres dump "Game.locres" -o game.json
 python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o edited.locres
+
+# Update checks & self-update (source installs)
+python main.py update check                  # 0 up to date · 1 check failed · 2 update available
+python main.py update-check                  # alias for update check
+python main.py update install                # git pull + pip install . into the active environment
 ```
 
 ---
@@ -181,7 +187,8 @@ python main.py locres edit "Game.locres" "Menu.START=Begin" "Menu.QUIT=Exit" -o 
 - **Locales** — `.locres` dump / edit / write-back with UTF-16 support.
 - **Full hex inspector** — raw bytes for anything without a dedicated viewer.
 - **Polished GUI** — dark & light themes, live search, drag-and-drop, extraction progress with cancel.
-- **Headless CLI** — detect, extract, repack, locres, keys, usmap, crack, codecs.
+- **Self-update** — checks the GitHub release feed (cached for 24 h, shared between CLI and GUI) and pops up a prompt when a newer build exists; source checkouts can update themselves (`git pull` + `pip install .`) in one click.
+- **Headless CLI** — detect, extract, repack, locres, keys, usmap, crack, codecs, update checks.
 
 ---
 

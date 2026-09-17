@@ -103,10 +103,12 @@ right-click → **Create shortcut** and put the shortcut anywhere.
 | Tools | **Ghidra Key Hunt...** | Find hardcoded AES keys in a game binary via headless Ghidra (see §5.4) |
 | Tools | **Generate USMAP from Running Game...** | Generate a mappings file (`.usmap`) from a running **Unreal Engine 5** game (see §6) |
 | Help | About DualForge | Version and info |
+| Help | Check for Updates... | Compare the installed version against the latest GitHub release and update a source checkout (see §8) |
 
 ### Toolbar
 
-Open, Folder, Extract (all), Export Selected, Keys, and a **Donate** button that opens
+Open, Folder, Extract (all), Export Selected, Keys, an **Update** button (check for and install
+newer DualForge versions — see §8), and a **Donate** button that opens
 the Ko-fi page (<https://ko-fi.com/b6000>) — the URL is editable in Settings.
 
 ### Docks
@@ -442,13 +444,56 @@ taken from — re-dump after a game update.
 |---|---|---|
 | **uex** (CUE4Parse CLI) | `.utoc`/`.ucas` IoStore, pak fallback | Settings → CUE4Parse CLI, or env var `DUALFORGE_CUE4PARSE` |
 | **USMap** (`.usmap`) | Unversioned UE5 packages (`.uasset`) — **Unreal only** | Settings → USMap, or drop the file in `~/.dualforge`; generate with **Tools ▸ Generate USMAP from Running Game...** (§6) |
-| **Engine version (EGame)** | Pick the exact CUE4Parse engine when auto-probing guesses wrongly (rare — see §9) | Env var `DUALFORGE_EGAME`, e.g. `GAME_UE5_2` |
+| **Engine version (EGame)** | Pick the exact CUE4Parse engine when auto-probing guesses wrongly (rare — see Settings above) | Env var `DUALFORGE_EGAME`, e.g. `GAME_UE5_2` |
 | **vgmstream** | Exotic audio decode + FLAC export | Settings → vgmstream, or env var `DUALFORGE_VGMSTREAM` |
 | **Oodle DLL** (`oo2core_*.dll`) | Oodle-compressed paks | Found automatically in the pak's folder chain, `Binaries/`, `~/.dualforge`, `PATH` — **never bundled or downloaded** |
 
 ---
 
-## 8. Troubleshooting
+## 8. Updating DualForge
+
+DualForge checks the **GitHub Releases API** for the latest release and compares it
+with the installed version. Results are cached to `~/.dualforge/update_check.json`
+(refreshed after 24 h, sooner on failure), so the check is shared between the CLI and
+the GUI and costs nothing on every launch.
+
+> **What can self-update?** Only **source checkouts** (`git clone` + `pip install -e .`)
+> can update themselves — the frozen build (`dist\DualForge.exe`) cannot patch itself
+> in place. On a frozen build, the update dialog/CLI tells you to download the new
+> release bundle and replace the application instead.
+
+### 8.1 From the GUI
+
+- **Toolbar ▸ Update** (or **Help ▸ Check for Updates...**) opens the **Update DualForge**
+  dialog: it shows the installed vs. latest version, a **Check Again** button, and —
+  when a newer release exists — **Update Now**.
+- On startup, DualForge **checks once automatically** (about 2.5 s after launch). If a
+  newer release exists, a pop-up offers **Update Now** or **Later**. Set the environment
+  variable `DUALFORGE_NO_UPDATE_CHECK=1` to skip that automatic check entirely.
+- **Update Now** runs `git pull --ff-only` and `pip install .` from the source checkout
+  into the active Python environment, streaming the command output into the dialog.
+  When it finishes, **restart DualForge** to run the new version.
+- If no releases have been published yet (or you are offline), the check simply reports
+  "up to date" — the GitHub feed returns no versions, so there is nothing to compare against.
+
+### 8.2 From the command line
+
+```powershell
+python main.py update check                # compare against the latest GitHub release
+python main.py update-check                # backwards-compatible alias for "update check"
+python main.py update check --url <endpoint>   # check against a custom latest-release feed
+python main.py update install              # git pull + pip install . (active environment)
+python main.py update install --no-pull    # reinstall the current checkout, skip git pull
+```
+
+`update check` exit codes: **0** up to date (same or newer, or no releases published yet),
+**1** the check failed (network/HTTP/payload), **2** a newer release is available — handy
+for scripting. `update install` prints the step output and signals success with exit 0;
+on failure (e.g. a frozen build, no source checkout, or `git/pip` errors) it exits 1.
+
+---
+
+## 9. Troubleshooting
 
 | Symptom | Cause & fix |
 |---|---|
@@ -469,7 +514,7 @@ taken from — re-dump after a game update.
 
 ---
 
-## 9. Build your own copy (from source)
+## 10. Build your own copy (from source)
 
 Requires **Python 3.10+** and **Git**.
 
@@ -504,7 +549,7 @@ prints the exact file to run. Oodle DLLs and CLI helpers are never bundled — d
 
 ---
 
-## 10. Command-line quick reference
+## 11. Command-line quick reference
 
 ```powershell
 python main.py detect "game\Content\Paks\pakchunk0-Windows.pak"   # identify a file
@@ -549,4 +594,10 @@ python main.py repack font   "sharedassets0.assets" "fonts/title"      "title.tt
 
 # Unreal .locres localization dump
 python main.py locres dump "game\Content\Localization\Game\Game.locres" -o game.json
+
+# Update checks & self-update (see §8)
+python main.py update check                # 0 up to date · 1 check failed · 2 update available
+python main.py update-check                # alias for "update check"
+python main.py update install              # git pull + pip install . (active environment)
+python main.py update install --no-pull    # reinstall the current checkout, skip git pull
 ```
