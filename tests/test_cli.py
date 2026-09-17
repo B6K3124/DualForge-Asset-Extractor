@@ -118,3 +118,56 @@ def test_locres_edit_refuses_source_overwrite(tmp_path, capsys):
     rc = cli._cmd_locres_edit(args)
     assert rc == 1
     assert "refusing to overwrite the source" in capsys.readouterr().err
+
+
+def test_export_mesh_skinned_gltf_and_static_fbx(tmp_path, capsys):
+    from tests.test_bethesda import _build_sse_nif, _build_sse_skinned_nif
+
+    skinned = tmp_path / "skinned.nif"
+    skinned.write_bytes(_build_sse_skinned_nif())
+    static = tmp_path / "static.nif"
+    static.write_bytes(_build_sse_nif())
+
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(skinned), "gltf", "-o", str(tmp_path / "skin")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    gltf_text = (tmp_path / "skin.gltf").read_text()
+    assert "skins" in gltf_text
+    assert "JOINTS_0" in gltf_text
+
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(static), "fbx", "-o", str(tmp_path / "static")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    fbx_bytes = (tmp_path / "static.fbx").read_bytes().decode("utf-8", "replace")
+    assert "Geometry" in fbx_bytes
+
+    args = cli.build_parser().parse_args(["export-mesh", str(tmp_path / "missing.nif")])
+    assert cli._cmd_export_mesh(args) == 1
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_export_mesh_glb_skin_passthrough(tmp_path, capsys):
+    from dualforge.export.gltf_reader import parse_glb_scene
+    from tests.test_gltf_reader import _skinned_glb
+
+    glb = tmp_path / "skinned.glb"
+    glb.write_bytes(_skinned_glb())
+
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(glb), "gltf", "-o", str(tmp_path / "out")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    gltf_text = (tmp_path / "out.gltf").read_text()
+    assert "skins" in gltf_text
+    assert "JOINTS_0" in gltf_text
+    assert "WEIGHTS_0" in gltf_text
+
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(glb), "fbx", "-o", str(tmp_path / "outfbx")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    fbx_bytes = (tmp_path / "outfbx.fbx").read_bytes().decode("utf-8", "replace")
+    assert "Deformer" in fbx_bytes
+    assert parse_glb_scene(glb.read_bytes()) is not None

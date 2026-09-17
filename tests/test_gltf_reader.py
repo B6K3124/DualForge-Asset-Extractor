@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dualforge.export.gltf_reader import GltfReaderError, MeshGeometry, parse_glb, read_glb
+from dualforge.export.gltf_reader import GltfReaderError, MeshGeometry, parse_glb, parse_glb_scene, read_glb
 
 
 def _glb(doc: dict, binary: bytes) -> bytes:
@@ -304,3 +304,95 @@ def test_rasterize_textured_centers_sample():
     rasterize_textured(8, 8, tris, vx, vy, vz, vuv, rgba, surface, zbuf)
     # Center pixel should have consumed the texture texel.
     assert np.array_equal(surface[4, 4], rgba[0, 0])
+
+
+def _skinned_glb():
+    verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+    indices = [0, 1, 2]
+    joints = [(0, 0, 0, 0), (0, 1, 0, 0), (1, 0, 0, 0)]
+    weights = [(1.0, 0.0, 0.0, 0.0), (0.5, 0.5, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)]
+    # glTF stores inverse bind matrices column-major; use a translation (2,3,4).
+    identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    bind = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 3.0, 4.0, 1.0]
+    pos_bytes = struct.pack("<9f", *[c for v in verts for c in v])
+    jnt_bytes = struct.pack("<12B", *[j for jj in joints for j in jj])
+    wgt_bytes = struct.pack("<12f", *[w for ww in weights for w in ww])
+    idx_bytes = struct.pack("<3I", *indices)
+    bind_bytes = struct.pack("<32f", *(identity + bind))
+    binary = pos_bytes + jnt_bytes + wgt_bytes + idx_bytes + bind_bytes
+    offs = []
+    cursor = 0
+    for blob in (pos_bytes, jnt_bytes, wgt_bytes, idx_bytes, bind_bytes):
+        offs.append(cursor)
+        cursor += len(blob)
+    doc = {
+        "asset": {"version": "2.0", "generator": "test"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [
+            {"mesh": 0, "skin": 0},
+            {"name": "Root"},
+            {"name": "Child", "children": []},
+        ],
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "attributes": {
+                            "POSITION": 0,
+                            "JOINTS_0": 1,
+                            "WEIGHTS_0": 2,
+                        },
+                        "indices": 3,
+                        "mode": 4,
+                    }
+                ]
+            }
+        ],
+        "skins": [
+            {"joints": [1, 2], "inverseBindMatrices": 4, "skeleton": 1}
+        ],
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": offs[0], "byteLength": len(pos_bytes)},
+            {"buffer": 0, "byteOffset": offs[1], "byteLength": len(jnt_bytes)},
+            {"buffer": 0, "byteOffset": offs[2], "byteLength": len(wgt_bytes)},
+            {"buffer": 0, "byteOffset": offs[3], "byteLength": len(idx_bytes)},
+            {"buffer": 0, "byteOffset": offs[4], "byteLength": len(bind_bytes)},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5121, "count": 3, "type": "VEC4"},
+            {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4"},
+            {"bufferView": 3, "componentType": 5125, "count": 3, "type": "SCALAR"},
+            {"bufferView": 4, "componentType": 5126, "count": 2, "type": "MAT4"},
+        ],
+    }
+    return _glb(doc, binary)
+
+
+def test_parse_glb_scene_extracts_skin():
+    scene = parse_glb_scene(_skinned_glb())
+    assert scene is not None
+    assert scene.name == "glb_skin"
+    assert scene.up_axis == "Y"
+    assert scene.uv_v_flip is True
+    assert len(scene.meshes) == 1
+    m = scene.meshes[0]
+    assert len(m.bones) == 2
+    assert [b.name for b in m.bones] == ["Root", "Child"]
+    assert [b.parent for b in m.bones] == [-1, -1]  # no explicit parent links
+    # Bind matrix (2,3,4) translation stored column-major at indices 12-14;
+    # after the transposition it must land on row-major indices 3,7,11.
+    assert m.bones[0].bind_matrix is not None
+    assert m.bones[0].bind_matrix[3] == 0.0
+    assert m.bones[1].bind_matrix is not None
+    assert [m.bones[1].bind_matrix[i] for i in (3, 7, 11)] == [2.0, 3.0, 4.0]
+    assert m.joints == [[0, 0, 0, 0], [0, 1, 0, 0], [1, 0, 0, 0]]
+    assert m.weights == [[1.0, 0.0, 0.0, 0.0], [0.5, 0.5, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+    assert m.triangles == [[0, 1, 2]]
+    assert len(m.vertices) == 3
+
+
+def test_parse_glb_scene_no_skin_returns_none():
+    assert parse_glb_scene(_simple_glb()) is None

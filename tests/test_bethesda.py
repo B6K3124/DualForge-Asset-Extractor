@@ -363,3 +363,292 @@ def test_nif_rejects_non_sse_versions():
     blob = _build_sse_nif()
     with pytest.raises(BethesdaError, match="unsupported NIF version"):
         parse_nif(blob[:37] + struct.pack("<I", 0x14020006) + blob[41:])
+
+
+def _ni_matrix(translation, scale=1.0) -> bytes:
+    rot = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    return struct.pack("<3f", *translation) + struct.pack("<9f", *rot) + struct.pack("<f", scale)
+
+
+def _ni_node(name_idx, children) -> bytes:
+    return b"".join(
+        [
+            struct.pack("<I", name_idx),
+            struct.pack("<I", 0xFFFFFFFF),  # num extra (-1 = none)
+            struct.pack("<I", 0xE),  # flags
+            struct.pack("<3f", 0.0, 0.0, 0.0),  # translation
+            struct.pack("<9f", 1, 0, 0, 0, 1, 0, 0, 0, 1),  # rotation
+            struct.pack("<f", 1.0),  # scale
+            struct.pack("<I", 0xFFFFFFFF),  # collision
+            struct.pack("<I", len(children)),  # num children
+            b"".join(struct.pack("<I", c) for c in children),
+            struct.pack("<I", 0),  # num effects (SSE)
+        ]
+    )
+
+
+def _build_sse_skinned_nif() -> bytes:
+    """Minimal skinned SSE NIF: skinned BSTriShape + NiSkinningData + bones.
+
+    Two bones (``Root`` -> ``Bone``); vertex rows carry position, UV and the
+    ``0x40`` weight/bone payloads (4 half-floats + 4 bytes).
+    """
+    desc = (0x43 << 44) | 8  # pos + uv + skin bits, 8-dword stride
+    rows = [
+        # (pos, uv, weights, bones)
+        ((0.0, 0.0, 0.0), (0.0, 0.0), (1, 0, 0, 0), (0, 0, 0, 0)),
+        ((1.0, 0.0, 0.0), (1.0, 0.0), (0.5, 0.5, 0, 0), (0, 1, 0, 0)),
+        ((0.0, 1.0, 0.0), (0.0, 1.0), (0, 1, 0, 0), (1, 0, 0, 0)),
+    ]
+    tri_verts = b"".join(
+        struct.pack("<3f", *pos)
+        + b"\x00\x00"  # unused W
+        + _half(u)
+        + _half(v)
+        + b"".join(_half(w) for w in weights)
+        + struct.pack("<4B", *bones)
+        + b"\x00" * 2  # pad to the 8-dword stride
+        for pos, (u, v), weights, bones in rows
+    )
+    block_shape = b"".join(
+        [
+            struct.pack("<I", 0),  # name (string idx 0)
+            struct.pack("<I", 0xFFFFFFFF),  # num extra
+            struct.pack("<I", 0xE),  # flags
+            struct.pack("<3f", 0.0, 0.0, 0.0),  # translation
+            struct.pack("<9f", 1, 0, 0, 0, 1, 0, 0, 0, 1),  # rotation
+            struct.pack("<f", 1.0),  # scale
+            struct.pack("<I", 0xFFFFFFFF),  # collision
+            b"\x00" * 16,  # NiBound
+            struct.pack("<I", 1),  # skin ref -> NiSkinningData
+            struct.pack("<I", 0xFFFFFFFF),  # shader ref
+            struct.pack("<I", 0xFFFFFFFF),  # alpha ref
+            struct.pack("<Q", desc),
+            struct.pack("<H", 1),  # num triangles
+            struct.pack("<H", 3),  # num vertices
+            struct.pack("<I", 96),  # data size
+            tri_verts,
+            struct.pack("<3H", 0, 1, 2),
+        ]
+    )
+    block_skin = b"".join(
+        [
+            _ni_matrix((0.0, 0.0, 0.0)),
+            struct.pack("<I", 2),  # num bones
+            _nif_sized_string(b"Root") + _ni_matrix((0.0, 0.0, 0.0)),
+            _nif_sized_string(b"Bone") + _ni_matrix((0.0, 0.0, 1.0)),
+        ]
+    )
+    block_root = _ni_node(1, [3])  # Root -> Bone
+    block_bone = _ni_node(2, [])
+    sizes = [len(block_shape), len(block_skin), len(block_root), len(block_bone)]
+
+    types = [b"BSTriShape", b"NiSkinningData", b"NiNode", b"NiNode"]
+    body = b"".join(
+        [
+            b"Gamebryo File Format, Version 20.2.0.7\x0a",
+            struct.pack("<I", 0x14020007),  # version (SSE)
+            b"\x01",  # endian
+            struct.pack("<I", 12),  # user version
+            struct.pack("<I", 4),  # num blocks
+            struct.pack("<I", 100),  # BS version
+            _nif_export_string(b"a"),  # author
+            _nif_export_string(b"p"),  # process script
+            _nif_export_string(b"e"),  # export script
+            struct.pack("<H", len(types)),
+            b"".join(_nif_sized_string(t) for t in types),
+            struct.pack("<4H", 0, 1, 2, 2),  # block type indices
+            struct.pack("<4I", *sizes),
+            struct.pack("<II", 3, 8),  # num strings, max len
+            _nif_sized_string(b"SkinnedShape"),
+            _nif_sized_string(b"Root"),
+            _nif_sized_string(b"Bone"),
+            struct.pack("<I", 0),  # num groups
+            struct.pack("<I", 1),  # num roots
+            struct.pack("<I", 0),
+            block_shape,
+            block_skin,
+            block_root,
+            block_bone,
+        ]
+    )
+    return body
+
+
+def test_nif_skinned_scene(tmp_path):
+    from dualforge.bethesda.nif import parse_nif, read_skinned_geometry
+    from dualforge.export.scene import save_scene
+
+    model = read_skinned_geometry(parse_nif(_build_sse_skinned_nif()))
+    assert model is not None
+    assert model.up_axis == "Z"
+    assert model.uv_v_flip is True
+    prim = model.meshes[0]
+    assert [b.name for b in prim.bones] == ["Root", "Bone"]
+    assert [b.parent for b in prim.bones] == [-1, 0]
+    assert prim.triangles[0] == [0, 1, 2]
+    assert prim.joints[1] == [0, 1, 0, 0]
+    assert prim.weights[1] == [0.5, 0.5, 0.0, 0.0]
+
+    written = save_scene(tmp_path / "skin", model, "gltf")
+    assert written == [str(tmp_path / "skin.gltf")]
+    assert "skins" in (tmp_path / "skin.gltf").read_text()
+    assert "JOINTS_0" in (tmp_path / "skin.gltf").read_text()
+    written = save_scene(tmp_path / "skin", model, "fbx")
+    fbx_text = (tmp_path / "skin.fbx").read_bytes().decode("utf-8", "replace")
+    assert "Deformer" in fbx_text
+    assert "Root" in fbx_text
+
+
+def _key_group_scalar(times: list[float], values: list[float]) -> bytes:
+    """SSE scalar KeyGroup with quadratic keys (time, value, fwd, bwd)."""
+    out = bytearray(struct.pack("<I", len(times)) + struct.pack("<I", 2))
+    for t, v in zip(times, values, strict=False):
+        out += struct.pack("<4f", t, v, 0.0, 0.0)
+    return bytes(out)
+
+
+def _build_sse_animation_nif(seq_copies: int = 1) -> bytes:
+    """Minimal Skyrim SE animated NIF: NiControllerSequence -> interpolator ->
+    NiTransformData (XYZ rotation keys spinning around Z) -> node."""
+    block_data = b"".join(
+        [
+            struct.pack("<I", 4),  # XYZ rotation type
+            _key_group_scalar([0.0, 1.0], [0.0, 0.0]),  # X always 0
+            _key_group_scalar([0.0, 1.0], [0.7853981633974483, 0.7853981633974483]),  # Y 45 deg
+            _key_group_scalar([0.0, 1.0], [0.0, 1.5707963267948966]),  # Z 0 -> 90 deg
+            struct.pack("<II", 1, 1),  # translation: 1 linear key
+            struct.pack("<f", 0.0) + struct.pack("<3f", 1.0, 2.0, 3.0),
+            struct.pack("<II", 1, 1),  # scale: 1 linear key = 1.0
+            struct.pack("<ff", 0.0, 1.0),
+            b"\xff\xff\x7f\xff",  # 4-byte sentinel tail
+        ]
+    )
+    block_interp = b"".join(
+        [
+            struct.pack("<3f", 0.0, 0.0, 0.0),  # interpolator translation
+            struct.pack("<4f", 1.0, 0.0, 0.0, 0.0),  # interpolator rotation quat
+            struct.pack("<I", 0),  # NiTransformData ref
+        ]
+    )
+    cb = b"".join(
+        [
+            struct.pack("<I", 1),  # interp ref -> NiTransformInterpolator
+            struct.pack("<I", 0xFFFFFFFF),  # ctrl ref
+            b"\x00",  # priority
+            struct.pack("<I", 1),  # node name string idx ("Wheel")
+            struct.pack("<I", 0xFFFFFFFF),  # prop type
+            struct.pack("<I", 0xFFFFFFFF),  # ctrl type
+            struct.pack("<I", 0xFFFFFFFF),  # ctrl id
+            struct.pack("<I", 0xFFFFFFFF),  # interp id
+        ]
+    )
+    footer = b"".join(
+        [
+            struct.pack("<f", 1.0),  # weight
+            struct.pack("<I", 0xFFFFFFFF),  # text keys ref
+            struct.pack("<I", 0),  # cycle type (loop)
+            struct.pack("<f", 1.0),  # frequency
+            struct.pack("<f", 0.0),  # start
+            struct.pack("<f", 1.0),  # stop
+            struct.pack("<I", 0xFFFFFFFF),  # manager ref
+            struct.pack("<I", 0xFFFFFFFF),  # accum root name
+            struct.pack("<H", 0),  # num anim note arrays
+            b"\xff\xff\x7f\xff",
+        ]
+    )
+    block_seq = b"".join(
+        [
+            struct.pack("<I", 1),  # num controlled blocks
+            struct.pack("<I", 0),  # name string idx ("Spin")
+            cb,
+            footer,
+        ]
+    )
+    assert len(block_data) == 168
+    assert len(block_interp) == 32
+    assert len(block_seq) == 75
+    sizes = [len(block_data), len(block_interp), *(len(block_seq),) * seq_copies]
+    types = [b"NiTransformData", b"NiTransformInterpolator", b"NiControllerSequence"]
+    num_blocks = 2 + seq_copies
+    return b"".join(
+        [
+            b"Gamebryo File Format, Version 20.2.0.7\x0a",
+            struct.pack("<I", 0x14020007),  # version (SSE)
+            b"\x01",  # endian
+            struct.pack("<I", 12),  # user version
+            struct.pack("<I", num_blocks),  # num blocks
+            struct.pack("<I", 100),  # BS version
+            _nif_export_string(b"a"),  # author
+            _nif_export_string(b"p"),  # process script
+            _nif_export_string(b"e"),  # export script
+            struct.pack("<H", len(types)),
+            b"".join(_nif_sized_string(t) for t in types),
+            struct.pack(f"<{num_blocks}H", 0, 1, *(2,) * seq_copies),  # block type indices
+            struct.pack(f"<{num_blocks}I", *sizes),
+            struct.pack("<II", 2, 6),  # num strings, max len
+            _nif_sized_string(b"Spin"),
+            _nif_sized_string(b"Wheel"),
+            struct.pack("<I", 0),  # num groups
+            struct.pack("<I", 1),  # num roots
+            struct.pack("<I", 0),
+            block_data,
+            block_interp,
+            block_seq * seq_copies,
+        ]
+    )
+
+
+def test_nif_animations(tmp_path):
+    import json
+    from pathlib import Path
+
+    from dualforge.bethesda.nif import _euler_xyz_quat, parse_nif, read_animations
+    from dualforge.export.scene import Bone, MeshPrimitive, SceneModel, save_scene
+
+    clips = read_animations(parse_nif(_build_sse_animation_nif()))
+    assert [c.name for c in clips] == ["Spin"]
+    clip = clips[0]
+    assert list(clip.tracks) == ["Wheel"]
+    wheel = clip.tracks["Wheel"]
+    assert list(wheel) == ["rotation", "translation", "scale"]
+    assert wheel["rotation"][0][0] == 0.0
+    assert wheel["rotation"][0][1] == pytest.approx(_euler_xyz_quat(0.0, 0.7853981633974483, 0.0))
+    assert wheel["rotation"][1][1] == pytest.approx(
+        _euler_xyz_quat(0.0, 0.7853981633974483, 1.5707963267948966)
+    )
+    assert wheel["translation"] == [(0.0, [1.0, 2.0, 3.0])]
+    assert wheel["scale"] == [(0.0, [1.0, 1.0, 1.0])]
+
+    model = SceneModel(
+        "an",
+        meshes=[
+            MeshPrimitive(
+                vertices=[[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+                triangles=[[0, 1, 2]],
+                bones=[Bone("Wheel", -1, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])],
+            )
+        ],
+    )
+    model.clips = clips
+    written = save_scene(tmp_path / "an", model, "gltf")
+    gltf_paths = [p for p in written if p.endswith(".gltf")]
+    assert any("Spin" in p for p in gltf_paths)
+    anim_doc = next(
+        json.loads(Path(p).read_text(encoding="utf-8")) for p in gltf_paths if "Spin" in p
+    )
+    assert anim_doc["animations"][0]["name"] == "Spin"
+    assert {c["target"]["path"] for c in anim_doc["animations"][0]["channels"]} == {
+        "rotation",
+        "translation",
+        "scale",
+    }
+    written = save_scene(tmp_path / "an", model, "fbx")
+    assert any("Spin" in p and p.endswith(".fbx") for p in written)
+
+
+def test_nif_animation_name_dedupe():
+    from dualforge.bethesda.nif import parse_nif, read_animations
+
+    clips = read_animations(parse_nif(_build_sse_animation_nif(seq_copies=2)))
+    assert [c.name for c in clips] == ["Spin", "Spin_1"]

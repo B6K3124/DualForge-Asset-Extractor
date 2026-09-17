@@ -9,17 +9,25 @@ diffuse texture so a mesh can be drawn textured.
 
 from __future__ import annotations
 
+import math
 import struct
 
 import numpy as np
 
 from dualforge.bethesda import BethesdaError
 from dualforge.export.gltf_reader import MeshGeometry
+from dualforge.export.scene import AnimationClip, Bone, MeshPrimitive, SceneModel
 from dualforge.log import get_logger
 
 logger = get_logger(__name__)
 
 NIF_VERSION_SSE = 0x14020007
+
+_KEY_LINEAR = 1
+_KEY_QUADRATIC = 2
+_KEY_TBC = 3
+_KEY_XYZ = 4
+_KEY_CONSTANT = 5
 
 
 class R:
@@ -234,9 +242,9 @@ def _strips_to_triangles(strips: list[int], lengths: list[int]) -> list[tuple[in
     return tris
 
 
-def _shape_prefix(nif: NifFile, block: NifBlock) -> R:
+def _shape_prefix(nif: NifFile, block: NifBlock) -> tuple[R, int, int]:
     """Skips the shared NiObjectNET / NiAVObject / BSTriShape prefix and
-    returns a reader positioned right after the skin/shader/alpha refs."""
+    returns the reader plus the shader and skin refs."""
     r = block.reader(nif.data)
     block.name(r)
     num_extra = r.u32()
@@ -249,10 +257,10 @@ def _shape_prefix(nif: NifFile, block: NifBlock) -> R:
     r.f32()  # scale
     r.u32()  # collision object
     r.skip(16)  # NiBound (center + radius)
-    r.u32()  # skin ref
+    skin_ref = r.u32()  # skin ref
     shader_ref = r.u32()  # shader property ref
     r.u32()  # alpha property ref
-    return r, shader_ref
+    return r, shader_ref, skin_ref
 
 
 def read_dynamic_tri_shape(nif: NifFile, block: NifBlock) -> np.ndarray | None:
@@ -262,7 +270,7 @@ def read_dynamic_tri_shape(nif: NifFile, block: NifBlock) -> np.ndarray | None:
     character heads here as ``Vector4[...]`` rows; the UV/triangle data
     lives in the paired NiSkinPartition.
     """
-    r, _ = _shape_prefix(nif, block)
+    r, _shader_ref, _skin_ref = _shape_prefix(nif, block)
     r.u64()  # vertex desc (only the zero-stride dynamic variant is present)
     r.u16()  # num triangles (0 for dynamic shapes)
     num_vertices = r.u16()
@@ -281,10 +289,12 @@ def read_dynamic_tri_shape(nif: NifFile, block: NifBlock) -> np.ndarray | None:
 
 
 def _vertex_row(reader: R, arg: int) -> tuple:
-    """One BSVertexDataSSE row: (pos, normal, uv, bytes_read).
+    """One BSVertexDataSSE row: (pos, normal, uv, bytes_read, weights, bones).
 
     Positions are full float3 in SSE either way; normal is a byte vector3
-    and UV a half2 when the matching arg bits are set.
+    and UV a half2 when the matching arg bits are set.  With the ``0x40``
+    vertex-descriptor bit set the row also holds 4x(weight: half, bone: byte),
+    returned as ``weights``/``bones`` (both None when unskinned).
     """
     start = reader.pos
     pos = reader.float3() if arg & 0x1 else (0.0, 0.0, 0.0)
@@ -302,12 +312,14 @@ def _vertex_row(reader: R, arg: int) -> tuple:
         reader.u8()  # bitangent Z
     if arg & 0x20:
         reader.skip(4)  # vertex colors
+    weights = None
+    bones = None
     if arg & 0x40:
-        reader.skip(8)  # bone weights (4 x half)
-        reader.skip(4)  # bone indices
+        weights = [reader.half() for _ in range(4)]
+        bones = [reader.u8() for _ in range(4)]
     if arg & 0x100:
         reader.f32()  # eye data
-    return pos, normal, uv, reader.pos - start
+    return pos, normal, uv, reader.pos - start, weights, bones
 
 
 def read_skin_partition(
@@ -320,9 +332,15 @@ def read_skin_partition(
     real Skyrim SE character files):
       uint data size, uint vertex size, u64 vertex desc, vertex data[...],
       then SkinPartition structs: num verts/tris/bones/strips/weights-per-
-      vert (u16 each), bone list, vertex map / weights / faces / bone
-      indices flags+data, LOD byte, Global VB byte, u64 partition vertex
-      desc, and the SSE-only triangle copy (global vertices).
+      vert (u16 each), bone list (u16 -> global skin-bone index), vertex
+      map (local -> global vertex), per-vertex weights (float), faces /
+      strips, per-vertex bone indices (byte -> partition bone list entry),
+      LOD byte, Global VB byte, u64 partition vertex desc, and the SSE-only
+      triangle copy (global vertices).
+
+    The per-partition skin tables are merged back into per-global-vertex
+    ``join``/``weight`` arrays (0..4 influences each) so a skinned mesh can
+    be exported directly.
     """
     data = nif.data
     offset = block.offset
@@ -344,7 +362,7 @@ def read_skin_partition(
     has_uv = False
     for i in range(num_vertices):
         r = R(data, offset + 16 + i * stride, offset + 16 + (i + 1) * stride)
-        pos, normal, uvrow, _consumed = _vertex_row(r, arg)
+        pos, normal, uvrow, _consumed, _weights, _bones = _vertex_row(r, arg)
         vertices[i] = pos
         if normal is not None:
             normals[i] = normal
@@ -354,6 +372,10 @@ def read_skin_partition(
     if dynamic_vertices is not None:
         vertices = dynamic_vertices
 
+    joints = np.zeros((num_vertices, 4), dtype=np.int32)
+    weights = np.zeros((num_vertices, 4), dtype=np.float32)
+    has_skin = False
+
     tris = []
     total_tris = 0
     p = offset + 16 + data_size
@@ -361,13 +383,16 @@ def read_skin_partition(
     while end - p >= 12:
         nv, nt, nb, ns, nwp = struct.unpack_from("<5H", data, p)
         p += 10
-        p += 2 * nb  # bones
+        partition_bones = struct.unpack_from(f"<{nb}H", data, p) if nb else ()
+        p += 2 * nb  # bones (partition bone list -> global skin-bone index)
         has_vm = data[p]
         p += 1
+        vertex_map = struct.unpack_from(f"<{nv}H", data, p) if has_vm else None
         if has_vm:
-            p += 2 * nv  # vertex map (local -> global vertex, skin weights)
+            p += 2 * nv  # vertex map (local -> global vertex)
         has_w = data[p]
         p += 1
+        weight_table = struct.unpack_from(f"<{nv * nwp}f", data, p) if has_w else ()
         if has_w:
             p += 4 * nv * nwp  # vertex weights (full floats)
         strip_lengths = struct.unpack_from(f"<{ns}H", data, p) if ns else ()
@@ -380,8 +405,9 @@ def read_skin_partition(
             p += 2 * sum(strip_lengths)  # strips
         has_bi = data[p]
         p += 1
+        bone_indices = struct.unpack_from(f"<{nv * nwp}B", data, p) if has_bi else ()
         if has_bi:
-            p += nv * nwp  # bone indices
+            p += nv * nwp  # bone indices (into the partition bone list)
         p += 2  # LOD level, Global VB
         p += 8  # partition vertex desc
         if nt > 0:
@@ -392,6 +418,17 @@ def read_skin_partition(
                     tris.append((a, b, c))
                     total_tris += 1
         p += 6 * nt  # SSE triangle copy (global vertex indices)
+        if has_w and has_bi and partition_bones:
+            has_skin = True
+            for local in range(nv):
+                global_vertex = int(vertex_map[local]) if vertex_map else local
+                if not (0 <= global_vertex < num_vertices):
+                    continue
+                for k in range(min(nwp, 4)):
+                    slot = local * nwp + k
+                    bone = partition_bones[int(bone_indices[slot])]
+                    joints[global_vertex][k] = bone
+                    weights[global_vertex][k] = weight_table[slot]
     if total_tris <= 0 or not tris:
         return None
     return {
@@ -399,6 +436,9 @@ def read_skin_partition(
         "normals": normals,
         "tris": np.asarray(tris, dtype=np.uint32),
         "uv": uv if has_uv else None,
+        "joints": joints if has_skin else None,
+        "weights": weights if has_skin else None,
+        "bone_names": None,
     }
 
 
@@ -425,7 +465,7 @@ def read_bstri_shape(nif: NifFile, block: NifBlock) -> dict:
     r.f32()  # scale
     r.u32()  # collision object
     r.skip(16)  # NiBound (center + radius)
-    r.u32()  # skin ref
+    skin_ref = r.u32()  # skin ref
     shader_ref = r.u32()  # shader property ref
     r.u32()  # alpha property ref
     descriptor = r.u64()  # BSVertexDesc
@@ -440,6 +480,11 @@ def read_bstri_shape(nif: NifFile, block: NifBlock) -> dict:
     normals[:, 2] = 1.0
     uv = np.zeros((num_vertices, 2), dtype=np.float32)
     has_uv = False
+    skin_weights = None
+    skin_bones = None
+    if arg & 0x40:
+        skin_bones = np.zeros((num_vertices, 4), dtype=np.int32)
+        skin_weights = np.zeros((num_vertices, 4), dtype=np.float32)
     for i in range(num_vertices):
         row_start = r.pos
         if arg & 0x1:
@@ -464,8 +509,10 @@ def read_bstri_shape(nif: NifFile, block: NifBlock) -> dict:
         if arg & 0x20:
             r.bytes(4)  # vertex colors
         if arg & 0x40:
-            r.bytes(8)  # bone weights (4 x half)
-            r.bytes(4)  # bone indices
+            weights = [r.half() for _ in range(4)]
+            bones = [r.u8() for _ in range(4)]
+            skin_weights[i] = weights
+            skin_bones[i] = bones
         if arg & 0x100:
             r.f32()  # eye data
         consumed = r.pos - row_start
@@ -493,6 +540,9 @@ def read_bstri_shape(nif: NifFile, block: NifBlock) -> dict:
         "normals": normals,
         "tris": triangles,
         "uv": use_uv,
+        "joints": skin_bones,
+        "weights": skin_weights,
+        "skin_ref": skin_ref,
         "texture_name": _shape_texture(nif, shader_ref),
     }
 
@@ -566,15 +616,15 @@ def read_geometry(nif: NifFile) -> MeshGeometry | None:
             elif block.type_name == "BSDynamicTriShape":
                 verts = read_dynamic_tri_shape(nif, block)
                 if verts is not None and len(verts):
-                    _, shader_ref = _shape_prefix(nif, block)
-                    dynamic_shapes.append((verts, shader_ref))
+                    _, shader_ref, skin_ref = _shape_prefix(nif, block)
+                    dynamic_shapes.append((verts, shader_ref, skin_ref))
         except BethesdaError:
             continue
         except Exception:
             logger.debug("geometry block %s could not be decoded", block.type_name, exc_info=True)
             continue
     if not candidates and dynamic_shapes:
-        verts, shader_ref = dynamic_shapes[0]
+        verts, shader_ref, _skin_ref = dynamic_shapes[0]
         for block in nif.blocks:
             if block.type_name != "NiSkinPartition":
                 continue
@@ -597,6 +647,228 @@ def read_geometry(nif: NifFile) -> MeshGeometry | None:
         uv=m["uv"],
         texture=None,
         texture_name=m.get("texture_name"),
+    )
+
+
+def _rest_matrix(translation: tuple[float, float, float], rotation: tuple[float, ...], scale: float) -> np.ndarray:
+    m = np.eye(4, dtype=np.float64)
+    for i in range(3):
+        for j in range(3):
+            m[i][j] = rotation[i * 3 + j] * scale
+    m[0][3], m[1][3], m[2][3] = translation
+    return m
+
+
+def _read_ni_hierarchy(nif: NifFile) -> dict[int, tuple[str, np.ndarray, list[int]]]:
+    """NiNode / BSFadeNode blocks: name, local rest matrix, children refs.
+
+    Layout (v20.2.0.7, user version 12): NiObjectNET name + extra data, then
+    NiAVObject flags / translation / rotation (Matrix33) / scale / collision,
+    then NiNode num children refs and (for SSE) an effects ref count."
+    """
+    out: dict[int, tuple[str, np.ndarray, list[int]]] = {}
+    for block in nif.blocks:
+        if block.type_name not in ("NiNode", "BSFadeNode"):
+            continue
+        try:
+            r = block.reader(nif.data)
+            name = block.name(r)
+            num_extra = r.u32()
+            if num_extra == 0xFFFFFFFF:
+                num_extra = 0
+            r.skip(4 * num_extra)
+            r.u32()  # NiAVObject flags
+            translation = r.float3()
+            rotation = tuple(r.f32() for _ in range(9))
+            scale = r.f32()
+            r.u32()  # collision object
+            num_children = r.u32()
+            children = [r.u32() for _ in range(num_children)]
+            if r.pos - block.offset < block.size:
+                num_effects = r.u32()  # effects ref list (SSE)
+                r.skip(4 * num_effects)
+            out[block.index] = (name, _rest_matrix(translation, rotation, scale), children)
+        except Exception:
+            logger.debug("node block %s could not be parsed", block.type_name, exc_info=True)
+            continue
+    return out
+
+
+def _skinned_hierarchy(nif: NifFile) -> tuple[list[str], list[int], list[np.ndarray]]:
+    """Root-first bone list from the NiNode tree: names, parent indices, and
+    row-major inverse-bind matrices (skin space)."""
+    nodes = _read_ni_hierarchy(nif)
+    parent_of: dict[int, int] = {}
+    for idx, (_name, _m, children) in nodes.items():
+        for child in children:
+            if child in nodes:
+                parent_of[child] = idx
+    roots = [i for i, (_n, _m, _c) in nodes.items() if i not in parent_of]
+    order: list[int] = []
+    visited: set[int] = set()
+
+    def visit(i: int) -> None:
+        if i in visited:
+            return
+        visited.add(i)
+        order.append(i)
+        for child in nodes[i][2]:
+            if child in nodes:
+                visit(child)
+
+    for root in roots:
+        visit(root)
+    for i in nodes:
+        visit(i)
+
+    world: dict[int, np.ndarray] = {}
+
+    def world_of(i: int) -> np.ndarray:
+        if i in world:
+            return world[i]
+        m = nodes[i][1].copy()
+        p = parent_of.get(i, -1)
+        if p != -1:
+            m = world_of(p) @ m
+        world[i] = m
+        return m
+
+    names: list[str] = []
+    parents: list[int] = []
+    binds: list[np.ndarray] = []
+    positions = {i: k for k, i in enumerate(order)}
+    for i in order:
+        names.append(nodes[i][0])
+        p = parent_of.get(i, -1)
+        parents.append(positions[p] if p != -1 else -1)
+        binds.append(np.linalg.inv(world_of(i)))
+    return names, parents, binds
+
+
+def _read_skinning_data(nif: NifFile) -> tuple[list[str], list[np.ndarray]] | None:
+    """Bone names and rest transforms from a NiSkinningData block.
+
+    Layout (v20.2.0.7, user version 12): skin transform (NiTransform), num
+    bones, then per-bone {name SizedString, NiTransform}.  Returns ``None``
+    when no block parses with sane counts.
+    """
+    for block in nif.blocks:
+        if block.type_name != "NiSkinningData":
+            continue
+        try:
+            r = block.reader(nif.data)
+            r.skip(52)  # skin transform NiTransform
+            num_bones = r.u32()
+            if num_bones <= 0 or num_bones > 4096:
+                continue
+            names: list[str] = []
+            matrices: list[np.ndarray] = []
+            ok = True
+            for _ in range(num_bones):
+                name = _sized_string(r)
+                translation = r.float3()
+                rotation = tuple(r.f32() for _ in range(9))
+                scale = r.f32()
+                if len(name) > 0 and set(name.split(".")[0].replace(" ", "")) - set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") :
+                    ok = False
+                    break
+                names.append(name)
+                matrices.append(_rest_matrix(translation, rotation, scale))
+            if ok and len(names) == num_bones:
+                return names, matrices
+        except Exception:
+            logger.debug("NiSkinningData block %s could not be parsed", block.index, exc_info=True)
+            continue
+    return None
+
+
+def read_skinned_geometry(nif: NifFile) -> SceneModel | None:
+    """Build a :class:`SceneModel` from the first skinned geometry block.
+
+    Prefers a BSTriShape carrying per-vertex weights (``0x40`` descriptor
+    bit); falls back to a BSDynamicTriShape + NiSkinPartition pair like
+    :func:`read_geometry`.  Bones come from the NiNode hierarchy (or the
+    NiSkinningData bone list when present); inverse-bind matrices are the
+    inverse of each bone's world-space rest transform.  NIF stores V-down
+    UVs, so the model is stamped ``uv_v_flip=True``.
+    """
+    skinned: list[dict] = []
+    for block in nif.blocks:
+        if block.type_name == "BSTriShape":
+            try:
+                m = read_bstri_shape(nif, block)
+            except Exception:
+                logger.debug("BSTriShape %d could not be decoded", block.index, exc_info=True)
+                continue
+            if m.get("joints") is not None and m.get("weights") is not None:
+                skinned.append(m)
+        elif block.type_name == "BSDynamicTriShape":
+            try:
+                verts = read_dynamic_tri_shape(nif, block)
+            except Exception:
+                continue
+            if verts is None or not len(verts):
+                continue
+            _, shader_ref, _skin_ref = _shape_prefix(nif, block)
+            for target in nif.blocks:
+                if target.type_name != "NiSkinPartition":
+                    continue
+                try:
+                    part = read_skin_partition(nif, target, verts)
+                except Exception:
+                    continue
+                if part is not None and part.get("joints") is not None:
+                    part["texture_name"] = _shape_texture(nif, shader_ref)
+                    skinned.append(part)
+    if not skinned:
+        return None
+    best = max(skinned, key=lambda x: len(x["tris"]))
+    if best["joints"] is None or best["joints"].size == 0 or best["weights"] is None:
+        return None
+    if len(best["joints"]) != len(best["weights"]):
+        return None
+
+    skinning = _read_skinning_data(nif)
+    bone_names, bone_parents, bind_matrices = _skinned_hierarchy(nif)
+    if skinning is not None:
+        snames, smats = skinning
+        if len(snames) == len(bone_names):
+            bone_names = snames
+        elif len(snames) >= best["joints"].max() + 1:
+            bone_names = snames
+            bone_parents = [-1] * len(snames)
+            bind_matrices = [np.linalg.inv(m) for m in smats]
+
+    bound = best["joints"].max()
+    if len(bone_names) <= bound:
+        for i in range(len(bone_names), int(bound) + 1):
+            bone_names.append(f"Bone_{i}")
+            bone_parents.append(-1)
+            bind_matrices.append(np.eye(4, dtype=np.float64))
+
+    joints = best["joints"].astype(np.int32).tolist()
+    weights = best["weights"]
+    sums = weights.sum(axis=1, keepdims=True)
+    sums[sums == 0.0] = 1.0
+    weights = (weights / sums).astype(np.float32).tolist()
+    prim = MeshPrimitive(
+        vertices=best["verts"].astype(np.float64).tolist(),
+        triangles=best["tris"].astype(np.int64).tolist(),
+        normals=best["normals"].astype(np.float64).tolist(),
+        uvs=(best["uv"].astype(np.float64).tolist() if best.get("uv") is not None else None),
+        joints=joints,
+        weights=weights,
+        bones=[
+            Bone(name, parent, [float(v) for v in m.ravel()])
+            for name, parent, m in zip(bone_names, bone_parents, bind_matrices, strict=True)
+        ],
+        texture_name=best.get("texture_name"),
+    )
+    return SceneModel(
+        "skinned",
+        meshes=[prim],
+        up_axis="Z",
+        uv_v_flip=True,
     )
 
 
@@ -651,3 +923,173 @@ def read_legacy_geometry(nif: NifFile, block: NifBlock) -> dict:
         "uv": None,
         "texture_name": None,
     }
+
+
+def _read_key_group(reader: R, vec: bool) -> list[tuple[float, list[float]]]:
+    """One SSE KeyGroup: num keys, interpolation, then ``(time, value)`` keys.
+
+    Scalar (rotation/scale) and Vector3 (translation) groups both keep their
+    forward/backward tangents in quadratic mode; those are discarded.
+    """
+    num_keyframes = reader.u32()
+    if num_keyframes == 0:
+        return []
+    interpolation = reader.u32()
+    if interpolation not in (_KEY_LINEAR, _KEY_QUADRATIC):
+        raise BethesdaError(f"unsupported SSE key interpolation type {interpolation}")
+    keyframes: list[tuple[float, list[float]]] = []
+    for _ in range(num_keyframes):
+        t = reader.f32()
+        if vec:
+            value = [reader.f32(), reader.f32(), reader.f32()]
+            if interpolation == _KEY_QUADRATIC:
+                reader.skip(24)  # forward/backward tangent vectors
+        else:
+            value = [reader.f32()]
+            if interpolation == _KEY_QUADRATIC:
+                reader.skip(8)  # forward/backward tangent scalars
+        keyframes.append((t, value))
+    return keyframes
+
+
+def _sample_scalar(keyframes: list[tuple[float, list[float]]], t: float) -> float:
+    """Linear sample of a scalar key curve at ``t`` (first/last key pinned)."""
+    if not keyframes:
+        return 0.0
+    if t <= keyframes[0][0]:
+        return keyframes[0][1][0]
+    for (t0, v0), (t1, v1) in zip(keyframes, keyframes[1:], strict=False):
+        if t0 <= t <= t1:
+            if t1 == t0:
+                return v0[0]
+            return v0[0] + (v1[0] - v0[0]) * (t - t0) / (t1 - t0)
+    return keyframes[-1][1][0]
+
+
+def _euler_xyz_quat(x: float, y: float, z: float) -> list[float]:
+    """Rotation ``Rx * Ry * Rz`` (applied X then Y then Z) as (w, x, y, z)."""
+    cx, cy, cz = math.cos(x / 2.0), math.cos(y / 2.0), math.cos(z / 2.0)
+    sx, sy, sz = math.sin(x / 2.0), math.sin(y / 2.0), math.sin(z / 2.0)
+    return [
+        cx * cy * cz + sx * sy * sz,
+        sx * cy * cz - cx * sy * sz,
+        cx * sy * cz + sx * cy * sz,
+        cx * cy * sz - sx * sy * cz,
+    ]
+
+
+def _transform_interpolator(nif: NifFile, interp: NifBlock) -> dict[str, list[tuple[float, list[float]]]]:
+    """Animated TRS channels from a NiTransformInterpolator's NiTransformData.
+
+    Layout (v20.2.0.7): interpolator translation (12B), rotation (16B), then the
+    NiTransformData ref at offset 28.  The data block holds a ``XYZ_ROTATION``
+    rot-type (u32), three scalar Euler KeyGroups, a Vector3 translation group
+    and a scalar scale group; the trailing 4 bytes are a sentinel to ignore.
+    """
+    r = interp.reader(nif.data)
+    r.skip(12)  # interpolator translation
+    r.skip(16)  # interpolator rotation
+    data_ref = r.u32()
+    if not (0 <= data_ref < len(nif.blocks)):
+        return {}
+    data = nif.blocks[data_ref]
+    if data.type_name != "NiTransformData":
+        return {}
+    dr = data.reader(nif.data)
+    rotation_type = dr.u32()
+    if rotation_type != _KEY_XYZ:
+        logger.debug(
+            "NiTransformData %d uses unsupported rotation type %d", data.index, rotation_type
+        )
+        return {}
+    x_keys = _read_key_group(dr, False)
+    y_keys = _read_key_group(dr, False)
+    z_keys = _read_key_group(dr, False)
+    trans_keys = _read_key_group(dr, True)
+    scale_keys = _read_key_group(dr, False)
+
+    channels: dict[str, list[tuple[float, list[float]]]] = {}
+    times = sorted({t for group in (x_keys, y_keys, z_keys) for t, _ in group})
+    if times:
+        rotation = [
+            (t, _euler_xyz_quat(_sample_scalar(x_keys, t), _sample_scalar(y_keys, t), _sample_scalar(z_keys, t)))
+            for t in times
+        ]
+        channels["rotation"] = rotation
+    if trans_keys:
+        channels["translation"] = [(t, list(v)) for t, v in trans_keys]
+    if scale_keys:
+        channels["scale"] = [(t, [v[0], v[0], v[0]]) for t, v in scale_keys]
+    return channels
+
+
+def _read_sequence_clip(nif: NifFile, block: NifBlock) -> AnimationClip | None:
+    """Decode a NiControllerSequence into its transform clips.
+
+    Layout (v20.2.0.7, BS version 100, validated against real Skyrim SE files):
+      u32 num controlled blocks, u32 name (string index),
+      then 29-byte controlled blocks (interp ref, ctrl ref, priority byte,
+      node name / prop type / ctrl type / ctrl id / interp id string indices),
+      then a 38-byte footer (weight, text-key ref, cycle, frequency, start,
+      stop, manager ref, accum-root name, u16 note-array count, 4B sentinel).
+      There is no array-grow-by and no phase field in SSE files.
+    Float/blend and bool controllers (alpha, particle emitters) stay unkeyed
+    as the AnimationClip TRS channels cannot carry them.
+    """
+    r = block.reader(nif.data)
+    num_cb = r.u32()
+    clip_name = block.name(r)
+    tracks: dict[str, dict[str, list]] = {}
+    for _ in range(num_cb):
+        interp_ref = r.u32()
+        r.u32()  # ctrl ref
+        r.u8()  # priority
+        node_idx = r.u32()
+        r.u32()  # prop type
+        r.u32()  # ctrl type
+        r.u32()  # ctrl id
+        r.u32()  # interp id
+        if not (0 <= node_idx < len(nif.strings)):
+            continue
+        if not (0 <= interp_ref < len(nif.blocks)):
+            continue
+        node_name = nif.strings[node_idx]
+        if not node_name:
+            continue
+        interp = nif.blocks[interp_ref]
+        channels = {}
+        if interp.type_name == "NiTransformInterpolator":
+            channels = _transform_interpolator(nif, interp)
+        if not channels:
+            continue
+        bag = tracks.setdefault(node_name, {})
+        for channel, curves in channels.items():
+            bag.setdefault(channel, []).extend(curves)
+    if not tracks:
+        return None
+    for _node, channels in tracks.items():
+        for channel in channels:
+            channels[channel] = sorted(channels[channel], key=lambda kv: kv[0])
+    return AnimationClip(clip_name or f"Seq_{block.index}", tracks)
+
+
+def read_animations(nif: NifFile) -> list[AnimationClip]:
+    """Decode every ``NiControllerSequence`` into :class:`AnimationClip` TRS tracks."""
+    clips: list[AnimationClip] = []
+    seen: dict[str, int] = {}
+    for block in nif.blocks:
+        if block.type_name != "NiControllerSequence":
+            continue
+        try:
+            clip = _read_sequence_clip(nif, block)
+        except Exception:
+            logger.debug("NiControllerSequence %d could not be decoded", block.index, exc_info=True)
+            continue
+        if clip is not None:
+            if clip.name in seen:
+                seen[clip.name] += 1
+                clip.name = f"{clip.name}_{seen[clip.name]}"
+            else:
+                seen[clip.name] = 0
+            clips.append(clip)
+    return clips

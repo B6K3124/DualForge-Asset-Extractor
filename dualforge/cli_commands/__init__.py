@@ -20,6 +20,7 @@ from dualforge.cli_commands.drivers import (
     _cmd_drivers_show,
 )
 from dualforge.cli_commands.extract import _cmd_extract
+from dualforge.cli_commands.export_mesh import _cmd_export_mesh
 from dualforge.cli_commands.il2cpp import _cmd_il2cpp_inspect, _cmd_il2cpp_strings
 from dualforge.cli_commands.keys import (
     _cmd_keys_add,
@@ -56,6 +57,7 @@ __all__ = [
     "_cmd_drivers_match",
     "_cmd_drivers_show",
     "_cmd_extract",
+    "_cmd_export_mesh",
     "_cmd_il2cpp_inspect",
     "_cmd_il2cpp_strings",
     "_cmd_keys_add",

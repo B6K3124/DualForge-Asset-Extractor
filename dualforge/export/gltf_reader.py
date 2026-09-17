@@ -371,6 +371,108 @@ def read_glb(path: str):
     return parse_glb(data)
 
 
+def parse_glb_scene(data: bytes):
+    """Parse a glTF 2.0 asset (binary GLB or JSON) into a skinned
+    :class:`~dualforge.export.scene.SceneModel` (or ``None`` when it carries
+    no skinned mesh).
+
+    Reads ``JOINTS_0`` / ``WEIGHTS_0`` per vertex, the skin's ``joints`` node
+    list, bone names + parent indices from the node tree and the (column-major
+    glTF) inverse bind matrices, converted back to the row-major order the
+    writers expect.  GLB UVs are already in glTF's ``V=0@top`` convention, so
+    the scene is stamped ``uv_v_flip=True`` (adapter flip + writer flip cancel
+    out).  Returns a Y-up :class:`SceneModel`, ``None`` when no skin exists.
+    """
+    from dualforge.export.scene import Bone, MeshPrimitive, SceneModel
+
+    if data[:4] == b"glTF":
+        doc, buffers = _read_glb(data)
+    else:
+        try:
+            doc = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise GltfReaderError(f"not a readable glTF asset: {exc}") from exc
+        buffers = _load_external_buffers(doc)
+
+    skins = doc.get("skins") or []
+    if not skins:
+        return None
+    skin = skins[0]
+    joint_nodes = skin.get("joints") or []
+    if not joint_nodes:
+        return None
+    nodes = doc.get("nodes") or []
+    if len(joint_nodes) > len(nodes):
+        return None
+
+    bone_names: list[str] = []
+    for node_index in joint_nodes:
+        node = nodes[node_index] if 0 <= node_index < len(nodes) else {}
+        bone_names.append(str(node.get("name") or f"Bone_{len(bone_names)}"))
+    child_of: dict[int, int] = {}
+    for parent_index, node in enumerate(nodes):
+        for child in node.get("children") or []:
+            child_of.setdefault(child, parent_index)
+    positions = {node_index: kind for kind, node_index in enumerate(joint_nodes)}
+    bone_parents: list[int] = []
+    for node_index in joint_nodes:
+        parent = child_of.get(node_index, -1)
+        bone_parents.append(positions.get(parent, -1) if parent != -1 else -1)
+
+    bind_matrices: list[list[float]] | None = None
+    ibm = skin.get("inverseBindMatrices")
+    if ibm is not None:
+        raw = _read_accessor(doc, buffers, ibm)
+        if raw:
+            bind_matrices = []
+            for row in raw:
+                mat = np.asarray(row, dtype=np.float32).reshape(4, 4).T  # column-major -> row-major
+                bind_matrices.append([float(v) for v in mat.ravel()])
+    if bind_matrices is not None and len(bind_matrices) != len(joint_nodes):
+        bind_matrices = None
+
+    for mesh in doc.get("meshes") or []:
+        for primitive in mesh.get("primitives") or []:
+            attributes = primitive.get("attributes", {}) or {}
+            if "JOINTS_0" not in attributes or "WEIGHTS_0" not in attributes:
+                continue
+            pos = _read_accessor(doc, buffers, attributes["POSITION"])
+            if pos is None:
+                continue
+            normals = None
+            if attributes.get("NORMAL") is not None:
+                normals = _read_accessor(doc, buffers, attributes["NORMAL"])
+            uvs = None
+            if attributes.get("TEXCOORD_0") is not None:
+                uvs = _read_accessor(doc, buffers, attributes["TEXCOORD_0"])
+            indices = _read_accessor(
+                doc, buffers, primitive.get("indices"), allow_unsigned=True
+            )
+            joints = _read_accessor(doc, buffers, attributes["JOINTS_0"])
+            weights = _read_accessor(doc, buffers, attributes["WEIGHTS_0"])
+            if joints is None or weights is None:
+                continue
+            vertices = np.asarray(pos, dtype=np.float32).reshape(-1, 3)
+            m = MeshPrimitive(
+                vertices=[[float(v) for v in row] for row in vertices],
+                triangles=[list(map(int, indices[i : i + 3])) for i in range(0, len(indices) - 2, 3)],
+                normals=(
+                    [[float(v) for v in row] for row in np.asarray(normals, dtype=np.float32).reshape(-1, 3)]
+                    if normals
+                    else None
+                ),
+                uvs=([[float(v[0]), float(v[1])] for v in np.asarray(uvs, dtype=np.float32).reshape(-1, 2)] if uvs else None),
+                joints=[[int(v) for v in row] for row in joints],
+                weights=[[float(v) for v in row] for row in weights],
+                bones=[
+                    Bone(name, parent, bind_matrices[idx] if bind_matrices else None)
+                    for idx, (name, parent) in enumerate(zip(bone_names, bone_parents, strict=True))
+                ],
+            )
+            return SceneModel("glb_skin", meshes=[m], up_axis="Y", uv_v_flip=True)
+    return None
+
+
 __all__ = [
     "GltfReaderError",
     "MeshGeometry",

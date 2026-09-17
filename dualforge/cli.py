@@ -24,6 +24,7 @@ from dualforge.cli_commands import (
     _cmd_drivers_match,
     _cmd_drivers_show,
     _cmd_extract,
+    _cmd_export_mesh,
     _cmd_il2cpp_inspect,
     _cmd_il2cpp_strings,
     _cmd_keys_add,
@@ -101,6 +102,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="stage up axis in the USD metadata (default: Y)",
     )
     world_parser.set_defaults(handler=_cmd_world)
+
+    export_parser = sub.add_parser(
+        "export-mesh",
+        help="export a raw mesh file (.nif / .glb) to skinned glTF / FBX",
+    )
+    export_parser.add_argument("path", help="mesh file (.nif / .glb)")
+    export_parser.add_argument(
+        "format", nargs="?", choices=("gltf", "fbx"), default="gltf",
+        help="output format (default: gltf)",
+    )
+    export_parser.add_argument(
+        "-o", "--out", default=None,
+        help="output path stem (default: input path without suffix)",
+    )
+    export_parser.set_defaults(handler=_cmd_export_mesh)
 
     il2cpp_parser = sub.add_parser(
         "il2cpp",

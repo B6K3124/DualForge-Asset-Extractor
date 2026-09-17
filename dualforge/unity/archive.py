@@ -378,7 +378,34 @@ def _export_mesh(obj, out_dir: str, asset_path: str, fmt: str, scope=None, mesh_
 
 def _export_skinned_gltf(obj, stem, name, verts, tris, uvs, scope=None, reader=None) -> str:
     """Export a mesh as skinned glTF (skeleton + morph targets) when possible."""
-    from dualforge.export.gltf import write_gltf, write_gltf_skinned
+    from dualforge.export.scene import save_scene
+
+    scene = _unity_scene_model(obj, name, verts, tris, uvs, scope=scope, reader=reader)
+    if scene is None:
+        raise UnityError("mesh produced no scene data")
+    return save_scene(stem, scene, "gltf")[0]
+
+
+def _export_skinned_fbx(obj, stem, name, verts, tris, uvs, scope=None, reader=None) -> str:
+    """Export a mesh (skinned + morph targets) to FBX when possible."""
+    from dualforge.export.scene import save_scene
+
+    scene = _unity_scene_model(obj, name, verts, tris, uvs, scope=scope, reader=reader)
+    if scene is None:
+        triangles = [tuple(t) for submesh in tris for t in submesh]
+        normals = getattr(obj, "m_Normals", None) or getattr(obj, "m_Normals4", None)
+        return _export_plain_fbx(stem, name, verts, triangles, normals, uvs)
+    return save_scene(stem, scene, "fbx")[0]
+
+
+def _unity_scene_model(obj, name, verts, tris, uvs, scope=None, reader=None):
+    """Build a :class:`SceneModel` for a Unity mesh (skinned when possible).
+
+    Mirrors the old glTF/FBX exporters: skin, bind poses and bone hierarchy
+    come from :mod:`dualforge.export.unity_skin`; falls back to a static scene
+    when the mesh is not skinned.  Returns ``None`` on missing geometry.
+    """
+    from dualforge.export.scene import Bone, MeshPrimitive, SceneModel
     from dualforge.export.unity_skin import (
         bind_poses,
         blend_shapes,
@@ -388,133 +415,58 @@ def _export_skinned_gltf(obj, stem, name, verts, tris, uvs, scope=None, reader=N
     )
 
     triangles = [tuple(t) for submesh in tris for t in submesh]
+    if not verts or not triangles:
+        return None
     normals = getattr(obj, "m_Normals", None) or getattr(obj, "m_Normals4", None)
 
     skin = skin_data(obj)
     binds = bind_poses(obj)
-    if skin is None or binds is None:
-        target = stem.with_suffix(".gltf")
-        write_gltf(
-            str(target),
-            [tuple(v) for v in verts],
-            triangles,
-            normals=[tuple(float(x) for x in n) for n in normals] if normals else None,
-            uvs=[tuple(float(u) for u in uv) for uv in uvs] if uvs else None,
-            name=name or "mesh",
-        )
-        return str(target)
-
-    joints, weights = skin
-    if len(joints) != len(verts):
-        joints, weights = None, None
+    joints = weights = None
+    if skin is not None and binds is not None:
+        joints, weights = skin
+        if len(joints) != len(verts):
+            joints = weights = None
 
     bone_names: list = []
     bone_parents: list = []
-    assets_file = None
-    if reader is not None:
-        try:
-            assets_file = reader.assets_file
-        except Exception:
-            logger.debug("no assets_file on reader; skipping bone hierarchy", exc_info=True)
-            assets_file = None
-    if assets_file is not None and scope is not None:
-        try:
-            smr = find_skinned_mesh_renderer(_iter_objects(scope), reader)
-            if smr is not None:
-                bone_names, bone_parents = bone_hierarchy(smr, assets_file)
-        except UnityError:
-            raise
-        except Exception:
-            logger.debug("bone hierarchy lookup failed; using fallback names", exc_info=True)
-            bone_names, bone_parents = [], []
-    if not bone_names:
-        bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
-        bone_parents = [-1] * len(binds)
+    if joints is not None:
+        assets_file = None
+        if reader is not None:
+            try:
+                assets_file = reader.assets_file
+            except Exception:
+                logger.debug("no assets_file on reader; skipping bone hierarchy", exc_info=True)
+                assets_file = None
+        if assets_file is not None and scope is not None:
+            try:
+                smr = find_skinned_mesh_renderer(_iter_objects(scope), reader)
+                if smr is not None:
+                    bone_names, bone_parents = bone_hierarchy(smr, assets_file)
+            except UnityError:
+                raise
+            except Exception:
+                logger.debug("bone hierarchy lookup failed; using fallback names", exc_info=True)
+                bone_names, bone_parents = [], []
+        if not bone_names:
+            bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
+            bone_parents = [-1] * len(binds)
 
-    blendshapes = blend_shapes(obj, len(verts))
-
-    target = stem.with_suffix(".gltf")
-    write_gltf_skinned(
-        str(target),
+    prim = MeshPrimitive(
         vertices=[tuple(v) for v in verts],
         triangles=triangles,
         normals=[tuple(float(x) for x in n) for n in normals] if normals else None,
         uvs=[tuple(float(u) for u in uv) for uv in uvs] if uvs else None,
         joints=joints,
         weights=weights,
-        bind_matrices=binds,
-        bone_names=bone_names,
-        bone_parents=bone_parents,
-        blendshapes=blendshapes or None,
-        name=name or "mesh",
+        bones=[
+            Bone(name, parent, [float(v) for v in bind])
+            for name, parent, bind in zip(bone_names, bone_parents, binds, strict=True)
+        ]
+        if joints is not None
+        else [],
+        blendshapes=blend_shapes(obj, len(verts)) or None,
     )
-    return str(target)
-
-
-def _export_skinned_fbx(obj, stem, name, verts, tris, uvs, scope=None, reader=None) -> str:
-    """Export a mesh (skinned + morph targets) to FBX when possible."""
-    from dualforge.export.fbx import write_fbx_mesh
-    from dualforge.export.unity_skin import (
-        bind_poses,
-        blend_shapes,
-        bone_hierarchy,
-        find_skinned_mesh_renderer,
-        skin_data,
-    )
-
-    triangles = [tuple(t) for submesh in tris for t in submesh]
-    normals = getattr(obj, "m_Normals", None) or getattr(obj, "m_Normals4", None)
-
-    skin = skin_data(obj)
-    binds = bind_poses(obj)
-    if skin is None or binds is None:
-        return _export_plain_fbx(stem, name, verts, triangles, normals, uvs)
-
-    joints, weights = skin
-    if len(joints) != len(verts):
-        return _export_plain_fbx(stem, name, verts, triangles, normals, uvs)
-
-    bone_names: list = []
-    bone_parents: list = []
-    assets_file = None
-    if reader is not None:
-        try:
-            assets_file = reader.assets_file
-        except Exception:
-            logger.debug("no assets_file on reader; skipping bone hierarchy", exc_info=True)
-            assets_file = None
-    if assets_file is not None and scope is not None:
-        try:
-            smr = find_skinned_mesh_renderer(_iter_objects(scope), reader)
-            if smr is not None:
-                bone_names, bone_parents = bone_hierarchy(smr, assets_file)
-        except UnityError:
-            raise
-        except Exception:
-            logger.debug("bone hierarchy lookup failed; using fallback names", exc_info=True)
-            bone_names, bone_parents = [], []
-    if not bone_names:
-        bone_names = [f"Bone_{idx}" for idx in range(len(binds))]
-        bone_parents = [-1] * len(binds)
-
-    blendshapes = blend_shapes(obj, len(verts))
-
-    target = stem.with_suffix(".fbx")
-    write_fbx_mesh(
-        str(target),
-        name or "mesh",
-        [tuple(v) for v in verts],
-        triangles,
-        normals=[tuple(float(x) for x in n) for n in normals] if normals else None,
-        uvs=[tuple(float(u) for u in uv) for uv in uvs] if uvs else None,
-        bone_names=bone_names,
-        bone_parents=bone_parents,
-        bind_matrices=binds,
-        joints=joints,
-        weights=weights,
-        blendshapes=blendshapes or None,
-    )
-    return str(target)
+    return SceneModel(name or "mesh", meshes=[prim])
 
 
 def _export_plain_fbx(stem, name, verts, triangles, normals, uvs) -> str:
@@ -636,6 +588,7 @@ def _iter_objects(scope):
 
 def _export_animation(obj, out_dir: str, asset_path: str, fmt: str) -> str:
     from dualforge.export.convert import save_json
+    from dualforge.export.scene import AnimationClip, SceneModel, save_scene
     from dualforge.export.unity_skin import animation_tracks
 
     stem = _output_stem(out_dir, asset_path)
@@ -654,26 +607,20 @@ def _export_animation(obj, out_dir: str, asset_path: str, fmt: str) -> str:
         summary["sample_rate"] = getattr(obj, "m_SampleRate", 0) or 60
         return save_json(summary, stem, "json")
 
-    if fmt == "fbx":
-        from dualforge.export.fbx import write_fbx_animation
-
-        target = stem.with_suffix(".fbx")
-        write_fbx_animation(
-            str(target),
-            name=name,
-            tracks=animation_tracks(obj),
-        )
-        return str(target)
-
-    from dualforge.export.gltf import write_gltf_animation
-
-    target = stem.with_suffix(".gltf")
-    write_gltf_animation(
-        str(target),
-        name=name,
-        tracks=animation_tracks(obj),
+    if fmt not in ("gltf", "fbx"):
+        raise UnityError(f"unsupported animation format {fmt!r}")
+    scene = SceneModel(
+        name,
+        meshes=[],
+        clips=[
+            AnimationClip(
+                name=name,
+                tracks=animation_tracks(obj),
+                fps=getattr(obj, "m_SampleRate", 0) or 60.0,
+            )
+        ],
     )
-    return str(target)
+    return save_scene(stem, scene, fmt)[0]
 
 
 def _export_audio(obj, out_dir: str, asset_path: str, fmt: str) -> str:

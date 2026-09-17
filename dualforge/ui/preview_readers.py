@@ -16,6 +16,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+import numpy as np
+
+from dualforge.export.gltf_reader import MeshGeometry
 from dualforge.log import get_logger
 from dualforge.ui import preview_helpers as helpers
 
@@ -280,8 +283,10 @@ class PreviewWorker(QThread):
         filename = Path(self.item.entry or self.item.title).name or "file.bin"
         mesh_result = self._try_unreal_mesh()
         if mesh_result is not None:
-            geometry, glb_bytes = mesh_result
+            geometry, glb_bytes, bones = mesh_result
             payload["mesh"] = geometry
+            if bones:
+                payload["bones"] = bones
             payload["glb"] = glb_bytes
             payload["glb_name"] = f"{Path(filename).stem}.glb"
             return payload
@@ -388,12 +393,26 @@ class PreviewWorker(QThread):
         if not glb_bytes:
             return None
         try:
-            from dualforge.export.gltf_reader import parse_glb
+            from dualforge.export.gltf_reader import parse_glb, parse_glb_scene
 
             geometry = parse_glb(glb_bytes)
             if geometry is None:
                 return None
-            return geometry, glb_bytes
+            bones = None
+            scene = parse_glb_scene(glb_bytes)
+            if scene is not None and scene.meshes and scene.meshes[0].bones:
+                bones = [
+                    {
+                        "index": idx,
+                        "name": b.name,
+                        "x": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[0, 3]),
+                        "y": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[1, 3]),
+                        "z": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[2, 3]),
+                        "parent": b.parent,
+                    }
+                    for idx, b in enumerate(scene.meshes[0].bones)
+                ]
+            return geometry, glb_bytes, bones
         except Exception:
             logger.warning("glTF parse of Unreal preview failed for %s", entry, exc_info=True)
             return None
@@ -439,14 +458,51 @@ class PreviewWorker(QThread):
         payload["raw"] = cached
         if filename.lower().endswith(".nif"):
             try:
-                from dualforge.bethesda.nif import parse_nif, read_geometry
+                from dualforge.bethesda.nif import parse_nif, read_geometry, read_skinned_geometry
 
-                geometry = read_geometry(parse_nif(cached))
-                if geometry is not None:
-                    payload["mesh"] = geometry
+                nif = parse_nif(cached)
+                skinned = read_skinned_geometry(nif)
+                if skinned is not None and skinned.meshes:
+                    prim = skinned.meshes[0]
+                    payload["mesh"] = MeshGeometry(
+                        np.asarray([v[:3] for v in prim.vertices], dtype=np.float32),
+                        np.asarray([n[:3] for n in prim.normals] if prim.normals else [], dtype=np.float32),
+                        np.asarray([t[:3] for t in prim.triangles], dtype=np.uint32).reshape(-1),
+                        np.zeros((0, 2), dtype=np.uint32),
+                        uv=np.asarray(prim.uvs, dtype=np.float32) if prim.uvs else None,
+                        texture=None,
+                        texture_name=prim.texture_name,
+                    )
+                    payload["bones"] = [
+                        {
+                            "index": idx,
+                            "name": b.name,
+                            "x": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[0, 3]),
+                            "y": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[1, 3]),
+                            "z": float(np.linalg.inv(np.asarray(b.bind_matrix, dtype=np.float64).reshape(4, 4))[2, 3]),
+                            "parent": b.parent,
+                        }
+                        for idx, b in enumerate(prim.bones)
+                    ]
+                    try:
+                        import tempfile
+
+                        from dualforge.export.scene import save_scene
+
+                        with tempfile.TemporaryDirectory() as td:
+                            tmp = Path(td) / "mesh"
+                            paths = save_scene(tmp, skinned, "gltf")
+                            if paths:
+                                payload["glb"] = Path(paths[0]).read_bytes()
+                                payload["glb_name"] = Path(paths[0]).name
+                    except Exception:
+                        logger.debug("NIF glTF export failed for %s", filename, exc_info=True)
+                else:
+                    geometry = read_geometry(nif)
+                    if geometry is not None:
+                        payload["mesh"] = geometry
             except Exception:
                 logger.debug("NIF geometry decode failed for %s", filename, exc_info=True)
-                pass
         _sniff_resource(payload, filename, cached, self.cache_dir, key)
         return payload
 
