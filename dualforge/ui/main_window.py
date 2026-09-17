@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from html import escape
 from pathlib import Path
 
@@ -123,6 +124,9 @@ class MainWindow(QMainWindow):
         self._cancel_button: QPushButton | None = None
         self._toolbar_actions: dict[str, QAction] = {}
         self._donate_button: QPushButton | None = None
+        self._update_button: QPushButton | None = None
+        self._update_check_worker = None
+        self._update_prompted = False
 
         self.setAcceptDrops(True)
         self._build_ui()
@@ -131,6 +135,8 @@ class MainWindow(QMainWindow):
         self._build_statusbar()
         self._rebuild_recent()
         self._restore_window_state()
+        if os.environ.get("DUALFORGE_NO_UPDATE_CHECK", "").upper() not in {"1", "TRUE", "YES", "ON"}:
+            QTimer.singleShot(2500, self._auto_update_check)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -310,6 +316,13 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(drivers_action)
 
         help_menu = menu_bar.addMenu("&Help")
+        update_action = QAction("Check for Updates...", self)
+        update_action.setToolTip(
+            "Check the GitHub release feed for a newer DualForge version"
+        )
+        update_action.triggered.connect(self._show_update_dialog)
+        help_menu.addAction(update_action)
+        help_menu.addSeparator()
         compat_action = QAction("Video Game Compatibility...", self)
         compat_action.setToolTip(
             "Compatibility guide for supported engines, formats and game drivers"
@@ -353,6 +366,14 @@ class MainWindow(QMainWindow):
         }
 
         toolbar.addSeparator()
+        update_btn = QPushButton("Update")
+        update_btn.setIcon(make_toolbar_icon("update", color))
+        update_btn.setToolTip(
+            "Check for and install DualForge updates (GitHub + git pull + pip)"
+        )
+        update_btn.clicked.connect(self._show_update_dialog)
+        toolbar.addWidget(update_btn)
+        self._update_button = update_btn
         donate_btn = QPushButton("Donate")
         donate_btn.setIcon(make_toolbar_icon("donate", self._donate_icon_color()))
         donate_btn.setProperty("role", "primary")
@@ -373,6 +394,8 @@ class MainWindow(QMainWindow):
             action.setIcon(make_toolbar_icon(name, color))
         if self._donate_button is not None:
             self._donate_button.setIcon(make_toolbar_icon("donate", self._donate_icon_color()))
+        if self._update_button is not None:
+            self._update_button.setIcon(make_toolbar_icon("update", color))
 
     def _build_statusbar(self) -> None:
         status = QStatusBar()
@@ -1442,6 +1465,47 @@ class MainWindow(QMainWindow):
         from dualforge.ui.about import AboutDialog
 
         AboutDialog(self).exec()
+
+    def _show_update_dialog(self) -> None:
+        from dualforge.ui.update_dialog import UpdateDialog
+
+        UpdateDialog(self, start_check=True).exec()
+
+    def _auto_update_check(self) -> None:
+        """Run a cached background check shortly after launch; pop up when stale."""
+        if self._update_prompted:
+            return
+        from dualforge.ui.update_dialog import UpdateCheckWorker
+
+        worker = UpdateCheckWorker(force=False)
+        self._update_check_worker = worker
+        worker.done.connect(self._on_update_check_done)
+        worker.failed.connect(self._on_update_check_failed)
+        worker.start()
+
+    def _on_update_check_done(self, state) -> None:
+        if self._update_prompted or not getattr(state, "is_outdated", False):
+            return
+        self._update_prompted = True
+        from dualforge.version import __version__
+
+        latest = state.latest or "?"
+        box = QMessageBox(self)
+        box.setWindowTitle("DualForge Update Available")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"DualForge {__version__} - a newer version ({latest}) is "
+            "available.<br><br>Update now, or check later under "
+            "Help \u2192 Check for Updates."
+        )
+        update_btn = box.addButton("Update Now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is update_btn:
+            self._show_update_dialog()
+
+    def _on_update_check_failed(self, message: str) -> None:
+        logger.debug("startup update check failed: %s", message)
 
     def open_ghidra_hunt(self) -> None:
         from dualforge.ui.ghidra_dialog import GhidraDialog

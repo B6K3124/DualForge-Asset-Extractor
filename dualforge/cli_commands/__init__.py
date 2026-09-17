@@ -43,6 +43,7 @@ from dualforge.cli_commands.usmap import (
     _cmd_usmap_repack,
     _cmd_usmap_validate,
 )
+from dualforge.cli_commands.update import _cmd_update_check, _cmd_update_install
 from dualforge.cli_commands.world import _cmd_world
 
 __all__ = [
@@ -76,5 +77,7 @@ __all__ = [
     "_cmd_usmap_names",
     "_cmd_usmap_repack",
     "_cmd_usmap_validate",
+    "_cmd_update_check",
+    "_cmd_update_install",
     "_cmd_world",
 ]

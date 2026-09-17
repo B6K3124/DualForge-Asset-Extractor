@@ -138,6 +138,20 @@ def _draw_keys(painter: QPainter, s: float, color: str) -> None:
     painter.drawLine(0.82 * s, 0.30 * s, 0.82 * s, 0.54 * s)
 
 
+def _draw_update(painter: QPainter, s: float, color: str) -> None:
+    painter.setPen(_icon_pen(color, s, 0.08))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawEllipse(QRectF(0.14 * s, 0.18 * s, 0.72 * s, 0.72 * s))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    up = QPainterPath()
+    up.moveTo(0.50 * s, 0.06 * s)
+    up.lineTo(0.42 * s, 0.28 * s)
+    up.lineTo(0.58 * s, 0.28 * s)
+    up.closeSubpath()
+    painter.drawPath(up)
+
+
 def _draw_donate(painter: QPainter, s: float, color: str) -> None:
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(color))
@@ -160,6 +174,7 @@ _ICON_PAINTERS: dict[str, _IconPainter] = {
     "extract": _draw_extract,
     "keys": _draw_keys,
     "donate": _draw_donate,
+    "update": _draw_update,
 }
 
 

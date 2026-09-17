@@ -43,6 +43,8 @@ from dualforge.cli_commands import (
     _cmd_usmap_names,
     _cmd_usmap_repack,
     _cmd_usmap_validate,
+    _cmd_update_check,
+    _cmd_update_install,
     _cmd_world,
 )
 
@@ -180,6 +182,51 @@ def build_parser() -> argparse.ArgumentParser:
 
     codec_parser = sub.add_parser("codecs", help="list supported compression codecs")
     codec_parser.set_defaults(handler=_cmd_codecs)
+
+    update_parser = sub.add_parser(
+        "update",
+        help="check for and apply DualForge updates",
+        description="Check the GitHub Releases API for the latest DualForge "
+        "release and report or apply it.",
+    )
+    update_sub = update_parser.add_subparsers(dest="update_command", required=True)
+    update_check = update_sub.add_parser(
+        "check",
+        help="compare the installed version against the latest release",
+        description="Reports whether the installed version is up to date "
+        "(same or newer). Exit codes: 0 up to date, 1 check failed, "
+        "2 update available.",
+    )
+    update_check.add_argument(
+        "--url",
+        default=None,
+        help="latest-release endpoint (default: the DualForge GitHub releases API)",
+    )
+    update_check.set_defaults(update_handler=_cmd_update_check)
+    update_install = update_sub.add_parser(
+        "install",
+        help="update the source checkout and reinstall the package",
+        description="Runs 'git pull' (unless --no-pull) and 'pip install .' "
+        "from the DualForge source checkout into the active environment.",
+    )
+    update_install.add_argument(
+        "--no-pull",
+        action="store_true",
+        help="skip 'git pull' (only reinstall the current checkout)",
+    )
+    update_install.set_defaults(update_handler=_cmd_update_install)
+
+    # Backwards-compatible alias for the original command name.
+    update_alias = sub.add_parser(
+        "update-check",
+        help="compare the installed version against the latest release",
+    )
+    update_alias.add_argument(
+        "--url",
+        default=None,
+        help="latest-release endpoint (default: the DualForge GitHub releases API)",
+    )
+    update_alias.set_defaults(handler=_cmd_update_check)
 
     usmap_parser = sub.add_parser("usmap", help="inspect, validate and rebuild .usmap files")
     usmap_sub = usmap_parser.add_subparsers(dest="usmap_command", required=True)
@@ -377,6 +424,9 @@ def main(argv=None) -> int:
     crack_handler = getattr(args, "crack_handler", None)
     if crack_handler:
         return crack_handler(args)
+    update_handler = getattr(args, "update_handler", None)
+    if update_handler:
+        return update_handler(args)
     locres_handler = getattr(args, "locres_handler", None)
     if locres_handler:
         return locres_handler(args)
