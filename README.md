@@ -1,6 +1,6 @@
 # DualForge
 
-### Extract assets from **any** Unity, Unreal, Bethesda (Gamebryo), or REDengine game — one tool, all engines.
+### Extract assets from **any** Unity, Unreal, Bethesda (Gamebryo), or REDengine game — one tool, most engines.
 
 **DualForge** is a modern desktop extractor and asset browser for Unity, Unreal, Bethesda Gamebryo, and CD Projekt RED games.
 Browse, preview, and export textures, meshes, audio, animations, and more — with full support for
@@ -18,12 +18,19 @@ Live 3D mesh previews (texture-mapped, Unreal GLB + Bethesda NIF):
 ![TEKKEN 8 fighter — Unreal skeletal mesh preview](docs/screenshots/tekken-model.png)
 ![Skyrim head — Bethesda Gamebryo NIF mesh preview](docs/screenshots/head-model.png)
 
-
 ---
 
-## Installation
+## Quick start
 
-### From core drivers
+New here? This is all you need to get from download to extracted assets. The rest of the
+README is a reference you can skip back to.
+
+**Requirements:** Windows 10/11 for the prebuilt build; **Python 3.10+** if you run from
+source. Everything else (pip, optional platforms) is optional and explained below.
+
+### 1. Install
+
+**Ready-made build** (recommended for non-developers):
 
 ```powershell
 .\scripts\install.ps1                        # installs to %LOCALAPPDATA%\Programs\DualForge
@@ -31,9 +38,10 @@ Live 3D mesh previews (texture-mapped, Unreal GLB + Bethesda NIF):
 .\scripts\install.ps1 -InstallDir "D:\Tools" # custom location
 ```
 
-Uninstall = delete the install folder (and the shortcut).
+No admin rights needed. **Uninstall** = delete the install folder (and the shortcut).
+A shortcut is added to the Start Menu; launch `DualForge.exe` from where it was installed.
 
-### From source (developers)
+**From source** (developers):
 
 ```powershell
 git clone https://github.com/B6K3124/DualForge-Asset-Extractor.git DualForge
@@ -44,24 +52,70 @@ pip install -e .
 python main.py
 ```
 
-Optional extras:
+Optional extras (install after the line above):
 
 ```powershell
 pip install -e ".[keys]"    # community key-endpoint sync (requests)
 pip install -e ".[snappy]"  # snappy codec support
 ```
 
+### 2. Open a game archive
+
+Launch DualForge, then **drag-and-drop** a `.pak`, `.utoc`/`.ucas`, Bethesda `.bsa`/`.ba2`,
+or Unity bundle onto the window — or use **File ▸ Open Archive** (**Ctrl+O**). You can also
+scan a whole game directory with **File ▸ Open Folder** (**Ctrl+Shift+O**).
+
+> **Encrypted archive?** DualForge never ships keys. Add yours via **File ▸ Manage Keys**
+> (or Auto-crack with **Tools ▸ Ghidra Key Hunt**) — see [Using the GUI](#using-the-gui).
+
+### 3. Preview an asset
+
+Click any file in the tree on the left. Textures, sprites, audio (with waveform),
+meshes (in 3D, skinned ones show their skeleton), animations, and text/JSON/XML each get
+a dedicated preview; anything without one lands in a **hex inspector**.
+
+### 4. Export what you want
+
+- **File ▸ Extract All** (**Ctrl+Shift+E**) — everything in the archive.
+- **File ▸ Export Selected** (**Ctrl+E**) — tick the checkboxes you want first.
+
+Both prompt for an output folder. Every export writes `_dualforge_manifest.json` into it,
+listing every file plus any warnings. Export **formats** (PNG/JPG/glTF/FBX/USD/JSON/…) are
+configured in **File ▸ Settings**.
+
+> **That's it.** For the full walkthrough — keys, USMAP generation, USMAP/updates, debugging —
+> see the [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+
 ---
 
-## Usage
+## Features
 
-Open an archive — **drag-and-drop** a `.pak`, `.utoc`/`.ucas`, Bethesda `.bsa`/`.ba2`, or Unity bundle onto the window.
-Click any asset to preview it, then **Extract All** to a folder or **Export Selected** for just the checked assets.
+- **Any format** — `.pak`, `.utoc`/`.ucas`, `.assets`, `.unity3d`, `.bundle`, and more — auto-detected by magic bytes.
+- **Encrypted archives** — multi-key AES with per-game scheme support; keys from manual entry, FModel import, or community sync.
+- **Ghidra auto-crack** — `crack run` hunts a game binary for hardcoded AES keys (portable Ghidra + Java auto-provisioned on demand), validates candidates against **every known encryption scheme**, and saves only the keys that actually decrypt a pak — tagged with the detected scheme.
+- **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
+- **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
+- **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
+- **3D preview** — wireframe + solid mesh viewer with skeleton overlay; Unreal (`.pak`) meshes are texture-mapped using baked base-color textures.
+- **Bethesda (Gamebryo)** — browse and extract `.bsa` / `.ba2` archives (BA2 DX10 textures rebuilt as DDS); NIF meshes render textured in the 3D viewport.
+- **FBX export** — skinned meshes with skeletons, morph targets (BlendShapes) and animation clips, as **FBX 7.4 binary** (verified importing cleanly into Blender 5.2); ASCII still available via `DUALFORGE_FBX_ASCII=1`.
+- **Audio preview** — waveform + inline playback (WAV/OGG/FLAC/raw, vgmstream for `.wem`).
+- **Videos** — `VideoClip` / `MovieTexture` streamed back to their original container (MP4/MOV/WebM/…).
+- **Sprite atlases** — every packed sprite exported individually.
+- **Asset metadata** — `AnimatorController`, `Avatar`, `LightmapData` exported as readable JSON.
+- **Write-back** — replace textures, fonts, and text assets, then save a new archive.
+- **Locales** — `.locres` dump / edit / write-back with UTF-16 support.
+- **Full hex inspector** — raw bytes for anything without a dedicated viewer.
+- **Polished GUI** — dark & light themes, live search, drag-and-drop, extraction progress with cancel.
+- **Self-update** — checks the GitHub release feed (cached for 24 h, shared between CLI and GUI) and pops up a prompt when a newer build exists; source checkouts can update themselves (`git pull` + `pip install .`) in one click.
+- **Headless CLI** — detect, extract, repack, locres, keys, usmap, crack, codecs, update checks.
 
-```
-python main.py          # from source
-dist\DualForge.exe      # from the build
-```
+---
+
+## Using the GUI
+
+Run `python main.py` (from source) or `dist\DualForge.exe` (from the build). The window has
+the asset tree on the left, the preview on the right, and a log dock at the bottom.
 
 | What you can do | Where |
 |---|---|
@@ -75,7 +129,14 @@ dist\DualForge.exe      # from the build
 | Configure export formats (PNG/JPG/DDS/glTF/FBX/USD/JSON/video…) | **File ▸ Settings** |
 | Check for & install updates | Toolbar **Update** or **Help ▸ Check for Updates...** |
 
-### CLI
+---
+
+## Command line
+
+Everything the GUI does is available headlessly — great for scripting or batch jobs. The
+screenshots above show the GUI, the commands below work from any terminal where `python main.py`
+runs. The full reference (with flags and exit codes) is in the
+[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 ```powershell
 # Detect a file
@@ -142,56 +203,6 @@ python main.py update install                # git pull + pip install . into the
 
 ---
 
-## Why DualForge
-
-| Capability | **DualForge** | FModel | UABEA | AssetStudio | uTinyRipper |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Unity bundles & serialized files | ✅ | – | ✅ | ✅ | ✅ |
-| Unreal `.pak` (native read) | ✅ | ✅ | – | – | – |
-| Unreal IoStore (`.utoc` / `.ucas`) | ✅ | ✅ | – | – | – |
-| Oodle decompression | ✅ | ✅ | – | – | – |
-| Multi-scheme AES + custom encryption | ✅ | AES | – | – | – |
-| Generate `.usmap` from running game | ✅ | – | – | – | – |
-| Ghidra key hunt + scheme-aware auto-crack | ✅ | – | – | – | – |
-| Mesh / audio / texture / text previews | ✅ | partial | ✅ | ✅ | limited |
-| Skeleton + animation export (glTF / FBX) | ✅ | ✅ | ✅ | ✅ | limited |
-| Cubemaps / VideoClips / SpriteAtlases / Animators / Avatars | ✅ | – | – | ✅ | limited |
-| Property inspector (MonoBehaviour) | ✅ | ✅ | ✅ | ✅ | limited |
-| **Write-back / repack** | ✅ | – | ✅ | – | – |
-| **USD world export** | ✅ | partial | – | partial | – |
-| Bethesda Gamebryo BSA/BA2 + NIF preview | ✅ | – | – | – | – |
-| CDPR REDengine `.archive` | ✅ | – | – | – | – |
-| **IL2CPP metadata dump** | ✅ | ✅ | – | – | – |
-| Headless CLI | ✅ | ✅ | – | – | – |
-
-*FModel is Unreal-only; UABEA / AssetStudio / uTinyRipper are Unity-only.*
-
----
-
-## Features at a glance
-
-- **Any format** — `.pak`, `.utoc`/`.ucas`, `.assets`, `.unity3d`, `.bundle`, and more — auto-detected by magic bytes.
-- **Encrypted archives** — multi-key AES with per-game scheme support; keys from manual entry, FModel import, or community sync.
-- **Ghidra auto-crack** — `crack run` hunts a game binary for hardcoded AES keys (portable Ghidra + Java auto-provisioned on demand), validates candidates against **every known encryption scheme**, and saves only the keys that actually decrypt a pak — tagged with the detected scheme.
-- **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
-- **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
-- **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
-- **3D preview** — wireframe + solid mesh viewer with skeleton overlay; Unreal (`.pak`) meshes are texture-mapped using baked base-color textures.
-- **Bethesda (Gamebryo)** — browse and extract `.bsa` / `.ba2` archives (BA2 DX10 textures rebuilt as DDS); NIF meshes render textured in the 3D viewport.
-- **FBX export** — skinned meshes with skeletons, morph targets (BlendShapes) and animation clips, as **FBX 7.4 binary** (verified importing cleanly into Blender 5.2); ASCII still available via `DUALFORGE_FBX_ASCII=1`.
-- **Audio preview** — waveform + inline playback (WAV/OGG/FLAC/raw, vgmstream for `.wem`).
-- **Videos** — `VideoClip` / `MovieTexture` streamed back to their original container (MP4/MOV/WebM/…).
-- **Sprite atlases** — every packed sprite exported individually.
-- **Asset metadata** — `AnimatorController`, `Avatar`, `LightmapData` exported as readable JSON.
-- **Write-back** — replace textures, fonts, and text assets, then save a new archive.
-- **Locales** — `.locres` dump / edit / write-back with UTF-16 support.
-- **Full hex inspector** — raw bytes for anything without a dedicated viewer.
-- **Polished GUI** — dark & light themes, live search, drag-and-drop, extraction progress with cancel.
-- **Self-update** — checks the GitHub release feed (cached for 24 h, shared between CLI and GUI) and pops up a prompt when a newer build exists; source checkouts can update themselves (`git pull` + `pip install .`) in one click.
-- **Headless CLI** — detect, extract, repack, locres, keys, usmap, crack, codecs, update checks.
-
----
-
 ## Supported formats
 
 - **Archives**: Unreal `.pak`, IoStore `.utoc`/`.ucas`, Unity bundles (`.assets`, `.unity3d`, `.bundle`) + stream files, Bethesda Gamebryo BSA/BA2, nested zip / 7z / gzip / zstd / lz4 / lzma.
@@ -248,7 +259,33 @@ very old UE1/UE2 paks have no CUE4Parse engine and are best-effort only.
 
 ---
 
-## Architecture
+## Why DualForge
+
+| Capability | **DualForge** | FModel | UABEA | AssetStudio | uTinyRipper |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Unity bundles & serialized files | ✅ | – | ✅ | ✅ | ✅ |
+| Unreal `.pak` (native read) | ✅ | ✅ | – | – | – |
+| Unreal IoStore (`.utoc` / `.ucas`) | ✅ | ✅ | – | – | – |
+| Oodle decompression | ✅ | ✅ | – | – | – |
+| Multi-scheme AES + custom encryption | ✅ | AES | – | – | – |
+| Generate `.usmap` from running game | ✅ | – | – | – | – |
+| Ghidra key hunt + scheme-aware auto-crack | ✅ | – | – | – | – |
+| Mesh / audio / texture / text previews | ✅ | partial | ✅ | ✅ | limited |
+| Skeleton + animation export (glTF / FBX) | ✅ | ✅ | ✅ | ✅ | limited |
+| Cubemaps / VideoClips / SpriteAtlases / Animators / Avatars | ✅ | – | – | ✅ | limited |
+| Property inspector (MonoBehaviour) | ✅ | ✅ | ✅ | ✅ | limited |
+| **Write-back / repack** | ✅ | – | ✅ | – | – |
+| **USD world export** | ✅ | partial | – | partial | – |
+| Bethesda Gamebryo BSA/BA2 + NIF preview | ✅ | – | – | – | – |
+| CDPR REDengine `.archive` | ✅ | – | – | – | – |
+| **IL2CPP metadata dump** | ✅ | ✅ | – | – | – |
+| Headless CLI | ✅ | ✅ | – | – | – |
+
+*FModel is Unreal-only; UABEA / AssetStudio / uTinyRipper are Unity-only.*
+
+---
+
+## Project layout
 
 ```
                  [ PySide6 GUI / CLI ]          main.py, dualforge/ui, dualforge/cli
