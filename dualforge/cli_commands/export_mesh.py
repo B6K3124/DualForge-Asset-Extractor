@@ -82,6 +82,24 @@ def _cmd_export_mesh(args: argparse.Namespace) -> int:
         clips = read_animations(nif)
         if clips:
             model.clips = clips
+    elif suffix == ".mesh":
+        from dualforge.cdpr.mesh import decode_mesh, mesh_to_scene
+
+        try:
+            info = decode_mesh(data, name=path.stem)
+        except Exception as exc:
+            print(f"could not parse mesh {path}: {exc}", file=sys.stderr)
+            return 1
+        model = mesh_to_scene(info)
+    elif suffix == ".rig":
+        from dualforge.cdpr.rig import decode_rig, rig_to_scene
+
+        try:
+            info = decode_rig(data, name=path.stem)
+        except Exception as exc:
+            print(f"could not parse rig {path}: {exc}", file=sys.stderr)
+            return 1
+        model = rig_to_scene(info)
     else:
         print(f"unsupported mesh type {suffix!r}", file=sys.stderr)
         return 1

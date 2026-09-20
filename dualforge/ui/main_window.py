@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 from dualforge.detector import detect
 from dualforge.extract import ExtractOptions, extract_file
 from dualforge.log import get_logger
-from dualforge.ui.archive_loaders import bethesda_kind, is_supported_archive, scan_archives
+from dualforge.ui.archive_loaders import bethesda_kind, entry_kind, is_supported_archive, scan_archives
 from dualforge.ui.branding import make_app_icon, make_folder_icon, make_toolbar_icon
 from dualforge.ui.keys_dialog import KeyDialog
 from dualforge.ui.preview import PreviewItem, PreviewPanel
@@ -70,6 +70,13 @@ def _type_icon(kind: str) -> QIcon:
         "Shader": "#e05252",
         "Material": "#e05252",
         "MonoBehaviour": "#4fd0c4",
+        "texture": "#4fae6d",
+        "audio": "#4f8fd0",
+        "video": "#e0764f",
+        "mesh": "#b06fd0",
+        "text": "#e0a53c",
+        "anim": "#d06f9a",
+        "terrain": "#6f9ad0",
     }
     color = colors.get(kind, "#8b90a3" if kind != "file" else "#5a5f73")
     pixmap = QPixmap(14, 14)
@@ -615,12 +622,13 @@ class MainWindow(QMainWindow):
         self.unreal_entries.extend(entries)
         for entry in entries:
             size = archive.size_of(entry)
+            kind = entry_kind(entry)
             self._add_file(
                 path,
                 entry,
-                "file",
+                kind,
                 size,
-                {"engine": "unreal", "path": entry, "kind": "file", "archive": path, "size": size},
+                {"engine": "unreal", "path": entry, "kind": kind, "archive": path, "size": size},
                 root,
             )
         self._set_engine("unreal", "native")
@@ -681,12 +689,13 @@ class MainWindow(QMainWindow):
             self._tree_builder = builder
         self.unreal_entries.extend(paths)
         for entry in paths:
+            kind = entry_kind(entry)
             self._add_file(
                 path,
                 entry,
-                "file",
+                kind,
                 0,
-                {"engine": "unreal", "path": entry, "kind": "file", "archive": path, "size": 0},
+                {"engine": "unreal", "path": entry, "kind": kind, "archive": path, "size": 0},
                 root,
             )
         self.log.appendPlainText(f"loaded {len(paths)} Unreal files from {Path(path).name}")
@@ -705,7 +714,15 @@ class MainWindow(QMainWindow):
         if root is not None:
             builder = AssetTreeBuilder(self.tree, root=root)
             self._tree_builder = builder
+        try:
+            from dualforge.cdpr.hashes import load_hash_database
+
+            hash_db = load_hash_database(self.settings.cdpr_hashes())
+        except Exception:
+            logger.debug("CDPR hash database unavailable", exc_info=True)
+            hash_db = None
         entries = list(archive.list_files())
+        resolved_count = 0
         for entry in entries:
             hash_int = int(Path(entry).stem, 16)
             entry_data = archive.get_entry(entry)
@@ -714,15 +731,34 @@ class MainWindow(QMainWindow):
                 for si in range(entry_data.segments_start, entry_data.segments_end):
                     if si < len(archive._segments):
                         size += archive._segments[si].size
+            display = entry
+            if hash_db is not None:
+                depot = hash_db.resolve(hash_int)
+                if depot:
+                    display = depot
+                    resolved_count += 1
+            kind = entry_kind(display)
             self._add_file(
                 path,
-                entry,
-                "file",
+                display,
+                kind,
                 size,
-                {"engine": "cdpr", "path": entry, "kind": "file", "archive": path, "size": size, "hash": f"0x{hash_int:016x}"},
+                {
+                    "engine": "cdpr",
+                    "path": entry,
+                    "name": display,
+                    "kind": kind,
+                    "archive": path,
+                    "size": size,
+                    "hash": f"0x{hash_int:016x}",
+                },
                 root,
             )
         self.log.appendPlainText(f"loaded {len(entries)} REDengine files from {Path(path).name}")
+        if hash_db is not None and resolved_count:
+            self.log.appendPlainText(
+                f"resolved {resolved_count} file names via the CDPR hash database"
+            )
         self.item_count.setText(f"{len(entries)} files")
         return len(entries)
 
@@ -986,9 +1022,9 @@ class MainWindow(QMainWindow):
         elif engine == "cdpr":
             self.preview_panel.request_preview(
                 PreviewItem(
-                    title=path,
+                    title=data.get("name") or path,
                     engine="cdpr",
-                    kind="file",
+                    kind=data.get("kind", "file"),
                     size=data.get("size") or 0,
                     entry=path,
                     archive_path=archive,
@@ -1054,8 +1090,12 @@ class MainWindow(QMainWindow):
             ]
         elif engine == "cdpr":
             rows += [
-                ("Type", "file"),
+                ("Type", data.get("kind", "file")),
                 ("Engine", "REDengine"),
+            ]
+            if data.get("name") and data["name"] != data.get("path"):
+                rows.append(("Resolved", data["name"]))
+            rows += [
                 ("Hash", data.get("hash", "")),
                 ("Source", Path(archive).name),
             ]

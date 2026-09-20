@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QUrl, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -38,6 +39,7 @@ _PAGE_TEXT = 4
 _PAGE_HEX = 5
 _PAGE_META = 6
 _PAGE_ERROR = 7
+_PAGE_VIDEO = 8
 
 
 class AudioPage(QWidget):
@@ -119,6 +121,92 @@ class AudioPage(QWidget):
     def _on_position(self, position: int) -> None:
         self.position.setValue(position)
         self.waveform.set_position(position / 1000.0)
+        self.time_label.setText(f"{self._fmt(position / 1000.0)} / {self._fmt(self.player.duration() / 1000.0)}")
+
+    def _on_status(self, status) -> None:
+        self.play_button.setText(
+            "Pause" if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState else "Play"
+        )
+
+
+class VideoPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.video = QVideoWidget()
+        self.video.setStyleSheet("background: #000;")
+        layout.addWidget(self.video, 1)
+
+        controls = QHBoxLayout()
+        self.play_button = QPushButton("Play")
+        self.play_button.setProperty("role", "primary")
+        self.play_button.clicked.connect(self._toggle_play)
+        controls.addWidget(self.play_button)
+
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.clicked.connect(self._stop)
+        controls.addWidget(self.stop_button)
+
+        self.position = QSlider(Qt.Orientation.Horizontal)
+        self.position.setEnabled(False)
+        self.position.sliderMoved.connect(self._seek)
+        controls.addWidget(self.position, 1)
+
+        self.time_label = QLabel("0:00 / 0:00")
+        self.time_label.setStyleSheet("color: #8b90a3;")
+        controls.addWidget(self.time_label)
+
+        volume = QSlider(Qt.Orientation.Horizontal)
+        volume.setMaximum(100)
+        volume.setValue(80)
+        volume.setFixedWidth(90)
+        volume.valueChanged.connect(lambda v: self.audio_output.setVolume(v / 100.0))
+        controls.addWidget(volume)
+        layout.addLayout(controls)
+
+        self.player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.audio_output.setVolume(0.8)
+        self.player.setAudioOutput(self.audio_output)
+        self.player.setVideoOutput(self.video)
+        self.player.durationChanged.connect(self._on_duration)
+        self.player.positionChanged.connect(self._on_position)
+        self.player.mediaStatusChanged.connect(self._on_status)
+
+    def set_video(self, path: str) -> None:
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(path))
+        self.position.setEnabled(True)
+        self.time_label.setText("0:00 / 0:00")
+
+    def clear(self) -> None:
+        self.player.stop()
+        self.position.setEnabled(False)
+        self.time_label.setText("0:00 / 0:00")
+
+    def _fmt(self, seconds: float) -> str:
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{minutes:02d}:{secs:02d}"
+
+    def _toggle_play(self) -> None:
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def _stop(self) -> None:
+        self.player.stop()
+
+    def _seek(self, position: int) -> None:
+        self.player.setPosition(position)
+
+    def _on_duration(self, duration: int) -> None:
+        self.position.setRange(0, max(duration, 1))
+
+    def _on_position(self, position: int) -> None:
+        self.position.setValue(position)
         self.time_label.setText(f"{self._fmt(position / 1000.0)} / {self._fmt(self.player.duration() / 1000.0)}")
 
     def _on_status(self, status) -> None:
@@ -345,6 +433,7 @@ class PreviewPanel(QStackedWidget):
         self.hex_page = HexPage()
         self.meta_page = MetaPage()
         self.error_page = MetaPage()
+        self.video_page = VideoPage()
 
         self.addWidget(self.hero_page)
         self.addWidget(self.image_page)
@@ -354,6 +443,7 @@ class PreviewPanel(QStackedWidget):
         self.addWidget(self.hex_page)
         self.addWidget(self.meta_page)
         self.addWidget(self.error_page)
+        self.addWidget(self.video_page)
 
         self.overlay = LoadingOverlay(self)
         self.overlay.cancel_button.clicked.connect(self._cancel_preview)
@@ -376,6 +466,7 @@ class PreviewPanel(QStackedWidget):
         self._worker.start()
 
     def _cancel_preview(self) -> None:
+        self.video_page.clear()
         if self._worker is not None:
             if self._worker.isRunning():
                 self._worker.cancel()
@@ -410,6 +501,11 @@ class PreviewPanel(QStackedWidget):
                 payload.get("channels", 1),
             )
             self.setCurrentIndex(_PAGE_AUDIO)
+            self.meta_page.title.setText(title)
+            self.meta_page.details.setText(meta_rows)
+        elif "video_path" in payload:
+            self.video_page.set_video(payload["video_path"])
+            self.setCurrentIndex(_PAGE_VIDEO)
             self.meta_page.title.setText(title)
             self.meta_page.details.setText(meta_rows)
         elif "mesh" in payload:

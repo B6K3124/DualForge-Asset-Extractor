@@ -52,7 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Iterator
 
-RDAR_MAGIC = b"RDAR"
+from dualforge.constants import RDAR_MAGIC
 
 _KARK_MAGIC = b"KARK"
 

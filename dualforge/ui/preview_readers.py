@@ -26,6 +26,19 @@ logger = get_logger(__name__)
 
 IMAGE_TYPES = {"Texture2D", "Sprite"}
 AUDIO_TYPES = {"AudioClip"}
+VIDEO_TYPES = {"VideoClip", "MovieTexture"}
+VIDEO_SUFFIXES = {
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".wmv",
+    ".ogv",
+    ".mpg",
+    ".mpeg",
+}
 MESH_TYPES = {"Mesh"}
 TEXT_TYPES = {"TextAsset"}
 OBJECT_TYPES = {"MonoBehaviour", "Material"}
@@ -150,6 +163,40 @@ class PreviewWorker(QThread):
                     "Channels": str(channels),
                 }
             )
+        elif type_name in VIDEO_TYPES:
+            from dualforge.export.unity_extra import video_clip_data
+
+            video_bytes: bytes = b""
+            video_suffix = ""
+            try:
+                video_bytes, video_suffix = video_clip_data(obj, self.item.archive_path, None)
+            except Exception:
+                logger.debug("video stream unavailable for %s", asset.type_name, exc_info=True)
+                original = str(getattr(obj, "m_OriginalPath", "") or "")
+                if original:
+                    video_suffix = Path(original).suffix or ".mp4"
+            if video_bytes:
+                key = helpers.cache_key(self.item.archive_path, asset.byte_size)
+                clip_key = helpers.cache_key(asset.path, asset.byte_size)
+                suffix = video_suffix if video_suffix.startswith(".") else f".{video_suffix}"
+                if suffix not in VIDEO_SUFFIXES:
+                    suffix = ".mp4"
+                video_path = helpers.write_cached(self.cache_dir, key, f"{clip_key}{suffix}", video_bytes)
+                payload["video_path"] = video_path
+                width = getattr(obj, "Width", "")
+                height = getattr(obj, "Height", "")
+                payload["meta"].update(
+                    {
+                        "Decoded": "video",
+                        "Format": suffix.lstrip(".").upper(),
+                        "Width": str(width) if width else "",
+                        "Height": str(height) if height else "",
+                    }
+                )
+            else:
+                raw = obj.raw_data if hasattr(obj, "raw_data") else asset._reader.get_raw_data()
+                payload["raw"] = raw
+                payload["meta"]["Decoded"] = "no (no streamed video bytes)"
         elif type_name in MESH_TYPES:
             from UnityPy.export import MeshExporter
 
@@ -425,7 +472,8 @@ class PreviewWorker(QThread):
         if archive is None:
             raise ValueError("no REDengine archive loaded for preview")
         key = helpers.cache_key(str(entry_name), self.item.size)
-        filename = Path(entry_name).name or "file.bin"
+        display_name = self.item.title or entry_name
+        filename = Path(display_name).name or "file.bin"
         cached = helpers.read_cached(self.cache_dir, key, filename)
         if cached is None:
             try:
@@ -436,7 +484,89 @@ class PreviewWorker(QThread):
             cached = raw
         payload["raw"] = cached
         _sniff_resource(payload, filename, cached, self.cache_dir, key)
+        if filename.lower().endswith((".xbm", ".texture")):
+            self._preview_cdpr_texture(payload, cached, filename)
+        elif filename.lower().endswith((".mesh", ".rig")):
+            self._preview_cdpr_geometry(payload, cached, filename)
         return payload
+
+    def _preview_cdpr_geometry(self, payload: dict, cached: bytes, filename: str) -> None:
+        """Decode a REDengine ``.mesh`` / ``.rig`` into a mesh preview payload."""
+        suffix = Path(filename).suffix.lower()
+        try:
+            if suffix == ".rig":
+                from dualforge.cdpr.rig import decode_rig, rig_to_scene
+
+                info = decode_rig(cached, name=Path(filename).stem)
+                scene = rig_to_scene(info)
+            else:
+                from dualforge.cdpr.mesh import decode_mesh, mesh_to_scene
+
+                info = decode_mesh(cached, name=Path(filename).stem)
+                scene = mesh_to_scene(info)
+            payload["meta"].update(info.meta)
+        except Exception:
+            logger.debug("REDengine geometry decode failed for %s", filename, exc_info=True)
+            return
+        prims = [m for m in scene.meshes if m.vertices]
+        if not prims:
+            return
+        prim = prims[0]
+        payload["mesh"] = MeshGeometry(
+            np.asarray([v[:3] for v in prim.vertices], dtype=np.float32),
+            np.asarray([n[:3] for n in prim.normals] if prim.normals else [], dtype=np.float32),
+            np.asarray([t[:3] for t in prim.triangles], dtype=np.uint32).reshape(-1),
+            np.zeros((0, 2), dtype=np.uint32),
+            uv=np.asarray(prim.uvs, dtype=np.float32) if prim.uvs else None,
+            texture=None,
+            texture_name=prim.texture_name,
+        )
+        bones = []
+        if prim.bones:
+            for idx, bone in enumerate(prim.bones):
+                if not bone.bind_matrix:
+                    continue
+                inv = np.linalg.inv(np.asarray(bone.bind_matrix, dtype=np.float64).reshape(4, 4))
+                bones.append(
+                    {
+                        "index": idx,
+                        "name": bone.name,
+                        "x": float(inv[0, 3]),
+                        "y": float(inv[1, 3]),
+                        "z": float(inv[2, 3]),
+                        "parent": bone.parent,
+                    }
+                )
+        if bones:
+            payload["bones"] = bones
+        payload["meta"]["Vertices"] = str(len(prim.vertices))
+        payload["meta"]["Triangles"] = str(len(prim.triangles))
+        try:
+            import tempfile
+
+            from dualforge.export.scene import save_scene
+
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td) / "mesh"
+                paths = save_scene(tmp, scene, "gltf")
+                if paths:
+                    payload["glb"] = Path(paths[0]).read_bytes()
+                    payload["glb_name"] = Path(paths[0]).name
+        except Exception:
+            logger.debug("REDengine glTF export failed for %s", filename, exc_info=True)
+
+    def _preview_cdpr_texture(self, payload: dict, cached: bytes, filename: str) -> None:
+        """Decode a REDengine ``CBitmapTexture`` (``.xbm``) into image/meta."""
+        try:
+            from dualforge.cdpr.xbm import decode_xbm
+
+            xbm = decode_xbm(cached)
+            payload["meta"].update(xbm.meta)
+            rgba = xbm.rgba_image()
+            if rgba is not None:
+                payload["image"] = _numpy_to_qimage(rgba)
+        except Exception:
+            logger.debug("XBM decode failed for %s", filename, exc_info=True)
 
     def _preview_bethesda(self) -> dict:
         payload = self._base_payload()
@@ -637,6 +767,16 @@ def _sniff_resource(
         payload["text"] = text
         payload["meta"].update(locres_meta)
         return
+    video = _sniff_video(filename, data, cache_dir, key)
+    if video is not None:
+        payload["video_path"] = video
+        payload["meta"].update(
+            {
+                "Decoded": "video",
+                "Format": Path(filename).suffix.lstrip(".").upper() or "VIDEO",
+            }
+        )
+        return
     image = helpers.sniff_image(data)
     if image is not None:
         payload["image"] = image
@@ -668,6 +808,34 @@ def _sniff_resource(
         payload["meta"]["Decoded"] = "yes (utf-8)"
     else:
         payload["meta"]["Decoded"] = "no"
+
+
+def _numpy_to_qimage(array: np.ndarray):
+    """Wrap an ``(H, W, 4)`` uint8 RGBA array in a QImage."""
+    from PySide6.QtGui import QImage
+
+    arr = np.ascontiguousarray(array)
+    height, width, _ = arr.shape
+    return QImage(
+        arr.data, width, height, arr.strides[0], QImage.Format.Format_RGBA8888
+    ).copy()
+
+
+def _sniff_video(filename: str, data: bytes, cache_dir: str, key: str) -> str | None:
+    """Write a video file to the preview cache for QMediaPlayer.
+
+    QMediaPlayer (Windows Media Foundation) plays the original container
+    directly, so the reader just needs to expose a real file path. Falls
+    back to ``None`` for other/empty payloads so callers continue with the
+    image/audio/text sniffing chain.
+    """
+    if Path(filename).suffix.lower() not in VIDEO_SUFFIXES or not data:
+        return None
+    try:
+        return helpers.write_cached(cache_dir, key, filename, data)
+    except OSError:
+        logger.debug("could not cache video file for preview", exc_info=True)
+        return None
 
 
 def _looks_like_unreal_package(entry: str) -> bool:

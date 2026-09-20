@@ -29,6 +29,7 @@ class Settings:
     cue4parse_path: str = ""
     usmap_path: str = ""
     vgmstream_path: str = ""
+    cdpr_hashes_path: str = ""
     preview_cache_dir: str = ""
     default_aes_key: str = ""
     try_all_keys: bool = True
@@ -45,6 +46,15 @@ class Settings:
         if self.preview_cache_dir:
             return self.preview_cache_dir
         return str(DEFAULT_CACHE_DIR)
+
+    def cdpr_hashes(self) -> str:
+        """Hash-table path: explicit setting, else DUALFORGE_CDPR_HASHES,
+        else the default file under ~/.dualforge."""
+        if self.cdpr_hashes_path:
+            return self.cdpr_hashes_path
+        from dualforge.cdpr.hashes import default_hash_csv
+
+        return default_hash_csv()
 
     def add_recent(self, path: str) -> None:
         if path in self.recent_files:
@@ -111,6 +121,9 @@ class SettingsDialog(QDialog):
 
         self.vgmstream_edit = self._path_field(settings.vgmstream_path, is_dir=False)
         form.addRow("vgmstream", self.vgmstream_edit)
+
+        self.cdpr_hashes_edit = self._path_field(settings.cdpr_hashes_path, is_dir=False)
+        form.addRow("CP77 path hashes (.csv)", self.cdpr_hashes_edit)
 
         self.cache_edit = self._path_field(settings.cache_dir(), is_dir=True)
         form.addRow("Preview cache folder", self.cache_edit)
@@ -225,6 +238,7 @@ class SettingsDialog(QDialog):
         self.settings.cue4parse_path = self.cue4parse_edit.itemAt(0).widget().text().strip()
         self.settings.usmap_path = self.usmap_edit.itemAt(0).widget().text().strip()
         self.settings.vgmstream_path = self.vgmstream_edit.itemAt(0).widget().text().strip()
+        self.settings.cdpr_hashes_path = self.cdpr_hashes_edit.itemAt(0).widget().text().strip()
         self.settings.preview_cache_dir = self.cache_edit.itemAt(0).widget().text().strip()
         self.settings.default_aes_key = self.aes_edit.text().strip()
         self.settings.try_all_keys = self.try_all_check.isChecked()

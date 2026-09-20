@@ -8,6 +8,7 @@ import pytest
 import dualforge.cli_commands.update as cmd_update
 import dualforge.update as upd
 from dualforge.update import NoReleasesError, UpdateError
+from dualforge.version import __version__
 
 
 class _Resp:
@@ -130,7 +131,7 @@ def _run(monkeypatch, capsys, argv=None):
 
 def test_cmd_update_check_up_to_date(monkeypatch, capsys):
     monkeypatch.setattr(
-        "dualforge.update.requests.get", _fake_get({"tag_name": "v0.3.0"})
+        "dualforge.update.requests.get", _fake_get({"tag_name": f"v{__version__}"})
     )
     rc, out = _run(monkeypatch, capsys)
     assert rc == 0
@@ -138,12 +139,14 @@ def test_cmd_update_check_up_to_date(monkeypatch, capsys):
 
 
 def test_cmd_update_check_update_available(monkeypatch, capsys):
+    head, _, tail = __version__.rpartition(".")
+    newer = f"{head}.{int(tail) + 1}"
     monkeypatch.setattr(
-        "dualforge.update.requests.get", _fake_get({"tag_name": "v0.9.9"})
+        "dualforge.update.requests.get", _fake_get({"tag_name": f"v{newer}"})
     )
     rc, out = _run(monkeypatch, capsys)
     assert rc == 2
-    assert "0.9.9" in out
+    assert newer in out
 
 
 def test_cmd_update_check_installed_newer(monkeypatch, capsys):

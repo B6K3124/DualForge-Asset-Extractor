@@ -71,7 +71,7 @@ Engine versions are surfaced in the GUI (properties + preview meta: "Unity versi
 > (requires network; the user's own `oo2core_*.dll` in `~/.dualforge` is picked up by the
 > native pak path instead).
 
-| vgmstream      | audio conversion             | (verify before distribution) |
+| vgmstream      | audio conversion             | never bundled; external CLI invoked at runtime (see LICENSES.md) |
 | oo2core_*.dll  | Oodle decompression          | RAD proprietary (never bundled) |
 
 ## Monetization & licensing decisions

@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parent.parent / "main.py"
 _spec = importlib.util.spec_from_file_location("dualforge_main", _ROOT)
 assert _spec and _spec.loader
@@ -11,8 +13,26 @@ _main = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _main
 _spec.loader.exec_module(_main)
 
+CLI_COMMANDS = [
+    "detect",
+    "extract",
+    "keys",
+    "codecs",
+    "usmap",
+    "drivers",
+    "crack",
+    "world",
+    "il2cpp",
+    "locres",
+    "repack",
+    "update",
+    "update-check",
+    "export-mesh",
+]
 
-def test_main_known_cli_command_routes_to_cli(monkeypatch):
+
+@pytest.mark.parametrize("command", CLI_COMMANDS)
+def test_main_cli_command_routes_to_cli(monkeypatch, command):
     monkeypatch.setattr(_main, "_run_gui", lambda: "GUI")
     from dualforge import cli as _cli
 
@@ -20,11 +40,10 @@ def test_main_known_cli_command_routes_to_cli(monkeypatch):
     orig = _cli.main
     try:
         _cli.main = lambda argv: captured.append(argv) or "CLI"
-        assert _main.main(["crack", "status"]) == "CLI"
-        assert _main.main(["drivers", "list"]) == "CLI"
+        assert _main.main([command, "arg"]) == "CLI"
     finally:
         _cli.main = orig
-    assert captured and captured[0] == ["crack", "status"]
+    assert captured and captured[0] == [command, "arg"]
 
 
 def test_main_unknown_arg_falls_back_to_gui(monkeypatch):

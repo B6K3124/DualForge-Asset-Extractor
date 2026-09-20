@@ -5,18 +5,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dualforge.compression import sniff
-from dualforge.constants import PAK_MAGIC
+from dualforge.constants import (
+    BA2_MAGIC,
+    BSA_MAGIC,
+    DDS_MAGIC,
+    IL2CPP_METADATA_MAGIC,
+    KTX1_MAGIC,
+    KTX2_MAGIC,
+    KTX_MAGIC,
+    LOCRES_MAGIC,
+    PAK_MAGIC,
+    RDAR_MAGIC,
+    UTOC_MAGIC,
+)
 
-UTOC_MAGIC = b"-==--==--==--==-"
-BSA_MAGIC = b"BSA\x00"
-BA2_MAGIC = b"BTD\x00"
-RDAR_MAGIC = b"RDAR"
-LOCRES_MAGIC = 0x324F4352
-IL2CPP_METADATA_MAGIC = 0xFAB11BAF
-DDS_MAGIC = b"DDS "
-KTX_MAGIC = b"\xAB" + b"KTX"
-KTX2_MAGIC = b"\xABKTX 20\xBB\r\n\x1A\n"
-KTX1_MAGIC = b"\xABKTX 11\xBB\r\n\x1A\n"
 BSA_VERSION_BY_INT = {0x67: 103, 0x68: 104, 0x69: 105}
 UNITY_SIGNATURES = (b"UnityFS", b"UnityWeb", b"UnityRaw")
 UNITY_SERIALIZED_VERSION_MIN = 13

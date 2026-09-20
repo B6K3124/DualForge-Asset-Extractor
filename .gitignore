@@ -13,5 +13,6 @@ log.txt
 output/
 out/
 .dualforge/
+.cp77-samples/
 .coverage
 htmlcov/

@@ -19,7 +19,8 @@ def main(argv=None) -> int:
         return _run_gui(open_path=open_path)
     if argv and argv[0] in {
         "detect", "extract", "keys", "codecs", "usmap", "drivers", "crack",
-        "world", "il2cpp", "locres", "repack",
+        "world", "il2cpp", "locres", "repack", "update", "update-check",
+        "export-mesh",
     }:
         from dualforge.cli import main as cli_main
 

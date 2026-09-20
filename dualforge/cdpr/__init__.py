@@ -1,3 +1,50 @@
 from dualforge.cdpr.archive import RedArchive, RedError, RDAR_MAGIC
+from dualforge.cdpr.cr2w import (
+    CR2W_MAGIC,
+    Cr2wBuffer,
+    Cr2wChunk,
+    Cr2wError,
+    Cr2wFile,
+    Variable,
+    decode_variables,
+    interpret_value,
+    load_cr2w,
+    parse_cr2w,
+)
+from dualforge.cdpr.hashes import (
+    DEFAULT_HASH_CSV,
+    ENV_HASH_CSV,
+    HashDatabase,
+    HashDatabaseError,
+    default_hash_csv,
+    fnv1a64,
+    load_hash_database,
+)
+from dualforge.cdpr.xbm import XBM_COMPRESSION_BLOCKS, XbmError, XbmTexture, decode_xbm
 
-__all__ = ["RedArchive", "RedError", "RDAR_MAGIC"]
+__all__ = [
+    "CR2W_MAGIC",
+    "DEFAULT_HASH_CSV",
+    "ENV_HASH_CSV",
+    "XBM_COMPRESSION_BLOCKS",
+    "XbmError",
+    "XbmTexture",
+    "Cr2wBuffer",
+    "Cr2wChunk",
+    "Cr2wError",
+    "Cr2wFile",
+    "HashDatabase",
+    "HashDatabaseError",
+    "RDAR_MAGIC",
+    "RedArchive",
+    "RedError",
+    "Variable",
+    "decode_variables",
+    "decode_xbm",
+    "default_hash_csv",
+    "fnv1a64",
+    "interpret_value",
+    "load_cr2w",
+    "load_hash_database",
+    "parse_cr2w",
+]

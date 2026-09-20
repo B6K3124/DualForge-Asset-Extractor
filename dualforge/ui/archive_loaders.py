@@ -37,6 +37,16 @@ _BETHESDA_KINDS = {
     ".xwm": "audio",
     ".mp3": "audio",
     ".ogg": "audio",
+    ".mp4": "video",
+    ".m4v": "video",
+    ".webm": "video",
+    ".mov": "video",
+    ".avi": "video",
+    ".mkv": "video",
+    ".wmv": "video",
+    ".ogv": "video",
+    ".mpg": "video",
+    ".mpeg": "video",
     ".txt": "text",
     ".json": "text",
     ".xml": "text",
@@ -47,11 +57,27 @@ _BETHESDA_KINDS = {
     ".kf": "anim",
     ".bto": "terrain",
     ".btr": "terrain",
+    ".xbm": "texture",
+    ".texture": "texture",
+    ".mesh": "mesh",
+    ".rig": "anim",
+    ".w2anims": "anim",
+    ".anims": "anim",
+    ".anim": "anim",
+    ".wem": "audio",
+    ".opus": "audio",
+    ".bnk": "audio",
+    ".a": "audio",
 }
 
 
+def entry_kind(name: str, default: str = "file") -> str:
+    """Generic asset kind for a file name (texture/audio/video/text/...)."""
+    return _BETHESDA_KINDS.get(Path(name).suffix.lower(), default)
+
+
 def bethesda_kind(name: str) -> str:
-    return _BETHESDA_KINDS.get(Path(name).suffix.lower(), "file")
+    return entry_kind(name)
 
 
 def is_supported_archive(path: str) -> bool:
@@ -86,4 +112,4 @@ def scan_archives(folder: str, depth: int = 4) -> list[str]:
     return found
 
 
-__all__ = ["ARCHIVE_SUFFIXES", "bethesda_kind", "is_supported_archive", "scan_archives"]
+__all__ = ["ARCHIVE_SUFFIXES", "bethesda_kind", "entry_kind", "is_supported_archive", "scan_archives"]

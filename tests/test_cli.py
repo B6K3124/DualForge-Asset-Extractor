@@ -171,3 +171,31 @@ def test_export_mesh_glb_skin_passthrough(tmp_path, capsys):
     fbx_bytes = (tmp_path / "outfbx.fbx").read_bytes().decode("utf-8", "replace")
     assert "Deformer" in fbx_bytes
     assert parse_glb_scene(glb.read_bytes()) is not None
+
+
+def test_export_mesh_cdpr_mesh_and_rig(tmp_path, capsys):
+    from tests.test_cdpr_mesh import _mesh_bytes
+
+    mesh = tmp_path / "hero.mesh"
+    mesh.write_bytes(_mesh_bytes())
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(mesh), "gltf", "-o", str(tmp_path / "hero")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    gltf_text = (tmp_path / "hero.gltf").read_text()
+    assert "skins" in gltf_text
+    assert "JOINTS_0" in gltf_text
+    assert "WEIGHTS_0" in gltf_text
+
+
+def test_export_mesh_cdpr_rig(tmp_path, capsys):
+    from tests.test_cdpr_rig import _rig_bytes
+
+    rig = tmp_path / "hero.rig"
+    rig.write_bytes(_rig_bytes())
+    args = cli.build_parser().parse_args(
+        ["export-mesh", str(rig), "fbx", "-o", str(tmp_path / "hero_rig")]
+    )
+    assert cli._cmd_export_mesh(args) == 0
+    fbx_bytes = (tmp_path / "hero_rig.fbx").read_bytes().decode("utf-8", "replace")
+    assert "Deformer" in fbx_bytes

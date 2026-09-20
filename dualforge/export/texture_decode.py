@@ -2,19 +2,19 @@
 
 Decodes the GPU block formats most common in shipped games with no C-side
 dependency: BC1 (DXT1), BC2 (DXT3), BC3 (DXT5), BC4 (RGTC1), BC5 (RGTC2),
-ETC1/ETC2 RGB, ETC2 punchthrough alpha and EAC (RGBA8 / R11 / RG11),
-plus uncompressed 8/16/24/32-bit RGB/RGBA/grayscale layouts. Output is
-always an RGBA PIL image in top-down order.
+BC7 (BPTC), ETC1/ETC2 RGB, ETC2 punchthrough alpha and EAC (RGBA8 / R11 /
+RG11), plus uncompressed 8/16/24/32-bit RGB/RGBA/grayscale layouts. Output
+is always an RGBA PIL image in top-down order.
 
 Supported containers:
 
-* DDS  - v1 + DX10 (BC1-BC5 + ETC/EAC DXGI codes, RGBA8/BGRA8, classic
+* DDS  - v1 + DX10 (BC1-BC5 + BC7 DXGI codes, RGBA8/BGRA8, classic
          uncompressed masks)
 * KTX1 - BC1/2/3/4/5 + ETC/EAC internal formats + uncompressed GL formats
 * KTX2 - non-supercompressed files (BC1-BC5, ETC/EAC, R8G8B8A8, B8G8R8A8)
 
-BC6H/BC7/ASTC and KTX2 supercompression are intentionally left out and
-raise a descriptive error rather than producing garbage.
+BC6H and ASTC are intentionally left out, as is KTX2 supercompression;
+they raise a descriptive error rather than producing garbage.
 """
 
 from __future__ import annotations
@@ -45,23 +45,16 @@ _FOURCC_FORMATS: dict[bytes, str] = {
 }
 
 _DXGI_FORMATS: dict[int, str] = {
+    28: "rgba8",  # R8G8B8A8_UNORM
     71: "bc1",  # BC1_UNORM
     74: "bc2",  # BC2_UNORM
     77: "bc3",  # BC3_UNORM
     80: "bc4",  # BC4_UNORM
     83: "bc5",  # BC5_UNORM
-    96: "etc2",  # ETC2_UNORM
-    97: "etc2_a1",  # ETC2_PUNCHTHROUGH_ALPHA1_UNORM
-    98: "etc2_a",  # ETC2_ALPHA8_UNORM (EAC alpha + ETC2 RGB)
-    99: "eac_r11",  # EAC_R11_UNORM
-    100: "eac_rg11",  # EAC_RG11_UNORM
-    28: "rgba8",  # R8G8B8A8_UNORM
     87: "bgra8",  # B8G8R8A8_UNORM
-    145: "etc2",  # ETC2_SRGB
-    146: "etc2_a1",  # ETC2_PUNCHTHROUGH_ALPHA1_SRGB
-    147: "etc2_a",  # ETC2_ALPHA8_SRGB
-    148: "eac_r11s",  # EAC_R11_SNORM
-    149: "eac_rg11s",  # EAC_RG11_SNORM
+    97: "bc7",  # BC7_TYPELESS
+    98: "bc7",  # BC7_UNORM
+    99: "bc7",  # BC7_UNORM_SRGB
 }
 
 _KTX_COMPRESSED: dict[int, str] = {
@@ -123,7 +116,7 @@ _VK_FORMATS: dict[int, str] = {
 }
 
 _BLOCK_FORMATS = frozenset(
-    {"bc1", "bc2", "bc3", "bc4", "bc5", "etc2", "etc2_a1", "etc2_a", "eac_r11", "eac_r11s", "eac_rg11", "eac_rg11s"}
+    {"bc1", "bc2", "bc3", "bc4", "bc5", "bc7", "etc2", "etc2_a1", "etc2_a", "eac_r11", "eac_r11s", "eac_rg11", "eac_rg11s"}
 )
 _MAX_DIMENSION = 16384
 
@@ -152,6 +145,132 @@ _ETC_INTENSITY_NONOPAQUE: list[tuple[int, int, int, int]] = [
 ]
 # Table C.8: distance for T/H modes.
 _ETC_DISTANCE = (3, 6, 11, 16, 23, 32, 41, 64)
+# ---------------------------------------------------------------------------
+# BC7 (BPTC) tables. Port follows uyjulian's pure-python_dds.decoder (MIT,
+# gist fa091806e354ae03f2edad1a7b45e030), which matches BinomialLLC's
+# bc7decomp.c bit-for-bit. Blocks are read as an LSB-first bit stream; the
+# mode is the index of the lowest set bit of byte 0 (8 = all-zero byte).
+# Per-mode layout: (subsets, partition bits, rotation bits, index-selection
+# bits, color bits, alpha bits, per-endpoint P-bits, shared P-bits, primary
+# index bits, secondary index bits).
+_BC7_MODES: tuple[tuple[int, ...], ...] = (
+    (3, 4, 0, 0, 4, 0, 1, 0, 3, 0),
+    (2, 6, 0, 0, 6, 0, 0, 1, 3, 0),
+    (3, 6, 0, 0, 5, 0, 0, 0, 2, 0),
+    (2, 6, 0, 0, 7, 0, 1, 0, 2, 0),
+    (1, 0, 2, 1, 5, 6, 0, 0, 2, 3),
+    (1, 0, 2, 0, 7, 8, 0, 0, 2, 2),
+    (1, 0, 0, 0, 7, 7, 1, 0, 4, 0),
+    (2, 6, 0, 0, 5, 5, 1, 0, 2, 0),
+)
+
+_BC7_PARTITIONS2 = (
+    0xCCCC, 0x8888, 0xEEEE, 0xECC8, 0xC880, 0xFEEC, 0xFEC8, 0xEC80,
+    0xC800, 0xFFEC, 0xFE80, 0xE800, 0xFFE8, 0xFF00, 0xFFF0, 0xF000,
+    0xF710, 0x008E, 0x7100, 0x08CE, 0x008C, 0x7310, 0x3100, 0x8CCE,
+    0x088C, 0x3110, 0x6666, 0x366C, 0x17E8, 0x0FF0, 0x718E, 0x399C,
+    0xAAAA, 0xF0F0, 0x5A5A, 0x33CC, 0x3C3C, 0x55AA, 0x9696, 0xA55A,
+    0x73CE, 0x13C8, 0x324C, 0x3BDC, 0x6996, 0xC33C, 0x9966, 0x0660,
+    0x0272, 0x04E4, 0x4E40, 0x2720, 0xC936, 0x936C, 0x39C6, 0x639C,
+    0x9336, 0x9CC6, 0x817E, 0xE718, 0xCCF0, 0x0FCC, 0x7744, 0xEE22,
+)
+
+_BC7_PARTITIONS3 = (
+    0xAA685050, 0x6A5A5040, 0x5A5A4200, 0x5450A0A8, 0xA5A50000, 0xA0A05050,
+    0x5555A0A0, 0x5A5A5050, 0xAA550000, 0xAA555500, 0xAAAA5500, 0x90909090,
+    0x94949494, 0xA4A4A4A4, 0xA9A59450, 0x2A0A4250, 0xA5945040, 0x0A425054,
+    0xA5A5A500, 0x55A0A0A0, 0xA8A85454, 0x6A6A4040, 0xA4A45000, 0x1A1A0500,
+    0x0050A4A4, 0xAAA59090, 0x14696914, 0x69691400, 0xA08585A0, 0xAA821414,
+    0x50A4A450, 0x6A5A0200, 0xA9A58000, 0x5090A0A8, 0xA8A09050, 0x24242424,
+    0x00AA5500, 0x24924924, 0x24499224, 0x50A50A50, 0x500AA550, 0xAAAA4444,
+    0x66660000, 0xA5A0A5A0, 0x50A050A0, 0x69286928, 0x44AAAA44, 0x66666600,
+    0xAA444444, 0x54A854A8, 0x95809580, 0x96969600, 0xA85454A8, 0x80959580,
+    0xAA141414, 0x96960000, 0xAAAA1414, 0xA05050A0, 0xA0A5A5A0, 0x96000000,
+    0x40804080, 0xA9A8A9A8, 0xAAAAAA44, 0x2A4A5254,
+)
+
+# Anchor pixel (subset != 0) for the "one bit fewer" primary index read.
+_BC7_ANCHORS2 = (
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+    15, 2, 8, 2, 2, 8, 8, 15, 2, 8, 2, 2, 8, 8, 2, 2,
+    15, 15, 6, 8, 2, 8, 15, 15, 2, 8, 2, 2, 2, 15, 15, 6,
+    6, 2, 6, 8, 15, 15, 2, 2, 15, 15, 15, 15, 15, 2, 2, 15,
+)
+_BC7_ANCHORS3A = (
+    3, 3, 15, 15, 8, 3, 15, 15, 8, 8, 6, 6, 6, 5, 3, 3,
+    3, 3, 8, 15, 3, 3, 6, 10, 5, 8, 8, 6, 8, 5, 15, 15,
+    8, 15, 3, 5, 6, 10, 8, 15, 15, 3, 15, 5, 15, 15, 15, 15,
+    3, 15, 5, 5, 5, 8, 5, 10, 5, 10, 8, 13, 15, 12, 3, 3,
+)
+_BC7_ANCHORS3B = (
+    15, 8, 8, 3, 15, 15, 3, 8, 15, 15, 15, 15, 15, 15, 15, 8,
+    15, 8, 15, 3, 15, 8, 15, 8, 3, 15, 6, 10, 15, 15, 10, 8,
+    15, 3, 15, 10, 10, 8, 9, 10, 6, 15, 8, 15, 3, 6, 6, 8,
+    15, 3, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 3, 15, 15, 8,
+)
+
+_BC7_WEIGHTS = {2: (0, 21, 43, 64), 3: (0, 9, 18, 27, 37, 46, 55, 64), 4: (0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64)}
+
+
+def _build_bc7_tables() -> tuple[np.ndarray, dict[int, dict]]:
+    mode_from_byte = np.zeros(256, np.int8)
+    for value in range(1, 256):
+        mode_from_byte[value] = (value & -value).bit_length() - 1
+    mode_from_byte[0] = 8
+
+    pre: dict[int, dict] = {}
+    for mode, (ns, pb, rb, isb, cb, ab, epb, spb, ib, ib2) in enumerate(_BC7_MODES):
+        numep = ns * 2
+        hdr = (mode + 1) + pb + rb + isb
+        per = np.arange(numep, dtype=np.int64) * cb
+        # Endpoints are read channel-major with per-entry width cb: all reds
+        # (hdr + i*cb), then all greens, then all blues, then all alphas.
+        rgb_s = np.concatenate([hdr + per, hdr + numep * cb + per, hdr + 2 * numep * cb + per])
+        alpha_s = hdr + 3 * numep * cb + np.arange(numep, dtype=np.int64) * ab if ab else None
+        data_end = hdr + numep * (3 * cb + ab)
+        epb_s = data_end + np.arange(numep, dtype=np.int64) if epb else None
+        spb_s = data_end + epb * numep + np.arange(ns, dtype=np.int64) if spb else None
+        primary_base = data_end + epb * numep + spb * ns
+        if ns == 1:
+            p_widths = np.full(16, ib, np.int64)
+            p_widths[0] -= 1
+            p_starts = np.concatenate([[0], np.cumsum(p_widths)[:-1]])
+        else:
+            p_widths = np.full((64, 16), ib, np.int64)
+            p_widths[:, 0] -= 1
+            if ns == 2:
+                p_widths[np.arange(64), np.asarray(_BC7_ANCHORS2)] -= 1
+            else:
+                p_widths[np.arange(64), np.asarray(_BC7_ANCHORS3A)] -= 1
+                p_widths[np.arange(64), np.asarray(_BC7_ANCHORS3B)] -= 1
+            p_starts = np.column_stack(
+                [np.zeros(64, np.int64), np.cumsum(p_widths, axis=1)[:, :-1]]
+            )
+        if ab and ib2:
+            sec_widths = np.full(16, ib2, np.int64)
+            sec_widths[0] -= 1
+            sec_starts = np.concatenate([[0], np.cumsum(sec_widths)[:-1]])
+        else:
+            sec_widths = sec_starts = None
+        pre[mode] = {
+            "ns": ns, "pb": pb, "rb": rb, "isb": isb, "cb": cb, "ab": ab,
+            "ebc": cb + epb + spb, "eba": ab + epb + spb, "numep": numep,
+            "rgb_s": rgb_s, "alpha_s": alpha_s, "epb_s": epb_s, "spb_s": spb_s,
+            "primary_base": primary_base, "primary_len": 16 * ib - ns,
+            "p_widths": p_widths, "p_starts": p_starts,
+            "sec_widths": sec_widths, "sec_starts": sec_starts,
+            "cw": np.asarray(_BC7_WEIGHTS[ib], np.uint8),
+            "aw": np.asarray(_BC7_WEIGHTS[ib2], np.uint8) if (ab and ib2) else None,
+            "subsets": (
+                ((np.asarray(_BC7_PARTITIONS2, np.uint64)[:, None] >> np.arange(16, dtype=np.uint64)[None, :]) & 1)
+                if ns == 2
+                else ((np.asarray(_BC7_PARTITIONS3, np.uint64)[:, None] >> (2 * np.arange(16, dtype=np.uint64))[None, :]) & 3)
+            ) if ns > 1 else None,
+        }
+    return mode_from_byte, pre
+
+
+_BC7_MODE_FROM_BYTE, _BC7_PRE = _build_bc7_tables()
 # EAC modifier tables (spec C.11 / table 3.17.2). 16 tables x 8 indices,
 # index 0:+a 1:+b 2:-a 3:-b 4:+c 5:+d 6:-c 7:-d.
 _EAC_MODIFIERS: list[tuple[int, int, int, int, int, int, int, int]] = [
@@ -657,6 +776,152 @@ def _decode_eac_channel_alpha(raw: np.ndarray) -> np.ndarray:
     return _clamp8(v)
 
 
+def _bc7_field(padded: np.ndarray, bit: int) -> np.ndarray:
+    """Read a single bit at the same absolute position for every block."""
+    return ((padded[:, bit >> 3] >> (bit & 7)) & 1).astype(np.int64)
+
+
+def _bc7_fields(padded: np.ndarray, starts, widths) -> np.ndarray:
+    """Vectorised LSB-first bit-field read over ``(B, 17)`` uint8 blocks.
+
+    ``starts``/``widths`` broadcast to a common ``(B, N)`` shape; fields
+    span at most two bytes (widths <= 8), so the padded 17th column keeps
+    cross-byte reads in-bounds even for the final byte.
+    """
+    starts = np.asarray(starts, dtype=np.int64)
+    widths = np.asarray(widths, dtype=np.int64)
+    if starts.ndim == 1:
+        starts = np.broadcast_to(starts, (padded.shape[0], starts.shape[0]))
+    if widths.ndim == 0:
+        widths = np.broadcast_to(widths, starts.shape)
+    elif widths.ndim == 1:
+        widths = np.broadcast_to(widths[None, :], starts.shape)
+    byte = starts >> 3
+    shift = starts & 7
+    rows = np.arange(padded.shape[0])[:, None]
+    lo = padded[rows, byte].astype(np.int64)
+    hi = padded[rows, byte + 1].astype(np.int64)
+    value = (lo | (hi << 8)) >> shift
+    return value & ((np.int64(1) << widths) - 1)
+
+
+def _bc7_expand(v: np.ndarray, bits: int) -> np.ndarray:
+    """Replicate a ``bits``-wide quantized value across the 8-bit range."""
+    v = v << (8 - bits)
+    return (v | (v >> bits)) & 0xFF
+
+
+def _decode_bc7_mode(mode: int, padded: np.ndarray) -> np.ndarray:
+    """Decode the ``(B, 17)`` blocks already known to use ``mode`` -> ``(B,16,4)``."""
+    pre = _BC7_PRE[mode]
+    n = padded.shape[0]
+    ns, cb, ab = pre["ns"], pre["cb"], pre["ab"]
+    numep = pre["numep"]
+
+    # Header fields (partition / rotation / index-selection) follow LSB-first.
+    bit = mode + 1
+    if pre["pb"]:
+        part = _bc7_fields(padded, bit, pre["pb"])[:, 0]
+        bit += pre["pb"]
+    else:
+        part = np.zeros(n, dtype=np.int64)
+    rot = _bc7_fields(padded, bit, pre["rb"])[:, 0] if pre["rb"] else np.zeros(n, dtype=np.int64)
+    bit += pre["rb"]
+    isel = _bc7_fields(padded, bit, pre["isb"])[:, 0] if pre["isb"] else np.zeros(n, dtype=np.int64)
+
+    # Endpoints read channel-major: all R, then all G, then all B, then A.
+    ep = np.zeros((n, numep, 4), dtype=np.int64)
+    ep[..., 3] = 255
+    values = _bc7_fields(padded, pre["rgb_s"], cb)  # (n, 3*numep)
+    ep[..., :3] = values.reshape(n, 3, numep).transpose(0, 2, 1)
+    if pre["alpha_s"] is not None:
+        ep[..., 3] = _bc7_fields(padded, pre["alpha_s"], ab)
+
+    # P-bits are shifted into the low end of every endpoint component.
+    if pre["epb_s"] is not None:
+        pv = _bc7_fields(padded, pre["epb_s"], 1)
+        ep[..., :3] = (ep[..., :3] << 1) | pv[:, :, None]
+        if pre["ab"]:
+            ep[..., 3] = (ep[..., 3] << 1) | pv
+    if pre["spb_s"] is not None:
+        pv = np.repeat(_bc7_fields(padded, pre["spb_s"], 1), 2, axis=1)
+        ep[..., :3] = (ep[..., :3] << 1) | pv[:, :, None]
+        if pre["ab"]:
+            ep[..., 3] = (ep[..., 3] << 1) | pv
+
+    ep[..., :3] = _bc7_expand(ep[..., :3], pre["ebc"])
+    if pre["ab"]:
+        ep[..., 3] = _bc7_expand(ep[..., 3], pre["eba"])
+
+    # Primary index stream (one bit shorter at each subset anchor).
+    if ns == 1:
+        starts = pre["primary_base"] + np.broadcast_to(pre["p_starts"], (n, 16))
+        widths = np.broadcast_to(pre["p_widths"], (n, 16))
+        subsets = np.zeros((n, 16), dtype=np.int64)
+    else:
+        starts = pre["primary_base"] + pre["p_starts"][part]
+        widths = pre["p_widths"][part]
+        subsets = pre["subsets"][part]
+    i0 = _bc7_fields(padded, starts, widths).astype(np.int64)
+    cw = pre["cw"][i0]
+
+    # Secondary index stream (modes 4/5): only pixel 0 is an anchor.
+    sec = pre["aw"] is not None
+    if sec:
+        i1 = _bc7_fields(
+            padded,
+            pre["primary_base"] + pre["primary_len"] + pre["sec_starts"][None, :],
+            pre["sec_widths"][None, :],
+        ).astype(np.int64)
+        aw = pre["aw"][i1]
+        s0 = np.where(isel[:, None] != 0, aw, cw)  # RGB weight
+        s1 = np.where(isel[:, None] != 0, cw, aw)  # alpha weight
+    else:
+        s0 = s1 = cw
+
+    # Gather the two endpoints for each pixel's subset and interpolate.
+    ep_idx = subsets * 2
+    e0 = ep[np.arange(n)[:, None], ep_idx]
+    e1 = ep[np.arange(n)[:, None], ep_idx + 1]
+    t0 = 64 - s0
+    t1 = 64 - s1
+    rgb = ((t0[..., None] * e0[..., :3] + s0[..., None] * e1[..., :3] + 32) >> 6) & 0xFF
+    alpha = ((t1 * e0[..., 3] + s1 * e1[..., 3] + 32) >> 6) & 0xFF
+    rgba = np.concatenate([rgb, alpha[..., None]], axis=-1).astype(np.uint8)
+
+    # Rotation swaps a single channel with alpha, per block.
+    if pre["rb"]:
+        red = rgba[..., 0].astype(np.int16)
+        green = rgba[..., 1].astype(np.int16)
+        blue = rgba[..., 2].astype(np.int16)
+        alpha_rot = rgba[..., 3].astype(np.int16)
+        r1, r2, r3 = (rot == 1)[:, None], (rot == 2)[:, None], (rot == 3)[:, None]
+        rgba[..., 0] = np.where(r1, alpha_rot, red)
+        rgba[..., 3] = np.where(r1, red, rgba[..., 3])
+        rgba[..., 1] = np.where(r2, alpha_rot, green)
+        rgba[..., 3] = np.where(r2, green, rgba[..., 3])
+        rgba[..., 2] = np.where(r3, alpha_rot, blue)
+        rgba[..., 3] = np.where(r3, blue, rgba[..., 3])
+    return rgba
+
+
+def _decode_bc7(blocks: np.ndarray) -> np.ndarray:
+    """Decode ``(B, 16)`` BC7 blocks into ``(B, 4, 4, 4)`` uint8 RGBA."""
+    b = blocks.shape[0]
+    padded = np.zeros((b, 17), dtype=np.uint8)
+    padded[:, :16] = blocks
+    out = np.zeros((b, 16, 4), dtype=np.uint8)
+    modes = _BC7_MODE_FROM_BYTE[blocks[:, 0]]
+    degenerate = modes == 8
+    if degenerate.any():
+        out[degenerate, :, 3] = 255  # all-zero byte -> opaque black
+    for mode in range(8):
+        sel = modes == mode
+        if sel.any():
+            out[sel] = _decode_bc7_mode(mode, padded[sel])
+    return out.reshape(b, 4, 4, 4)
+
+
 def _decode_blocks(fmt: str, data: bytes, width: int, height: int) -> np.ndarray:
     """Decode a full buffer of blocks into an ``(H, W, 4)`` uint8 image."""
     block_bytes = {
@@ -665,6 +930,7 @@ def _decode_blocks(fmt: str, data: bytes, width: int, height: int) -> np.ndarray
         "bc2": 16,
         "bc3": 16,
         "bc5": 16,
+        "bc7": 16,
         "etc2": 8,
         "etc2_a1": 8,
         "etc2_a": 16,
@@ -684,6 +950,8 @@ def _decode_blocks(fmt: str, data: bytes, width: int, height: int) -> np.ndarray
     flat = blocks.reshape(-1, block_bytes)
     if fmt in ("bc1", "bc2", "bc3", "bc4", "bc5"):
         out = _decode_bc(flat, fmt)  # (N, 4, 4, 4)
+    elif fmt == "bc7":
+        out = _decode_bc7(flat)
     elif fmt in ("etc2", "etc2_a1"):
         out = _decode_etc_rgb(flat, fmt)
     elif fmt in ("eac_r11", "eac_r11s", "eac_rg11", "eac_rg11s"):
