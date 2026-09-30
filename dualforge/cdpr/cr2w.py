@@ -151,41 +151,58 @@ def parse_cr2w(data: bytes, path: str = "") -> Cr2wFile:
     if data[:4] != CR2W_MAGIC:
         raise Cr2wError(f"not a REDengine 4 CR2W (magic: {data[:4]!r})")
 
-    (
-        version,
-        flags,
-        time_stamp,
-        build_version,
-        objects_end,
-        buffers_end,
-        header_crc,
-        num_chunks,
-    ) = _HEADER.unpack_from(data, 4)
+    # KARK buffers need the game-shipped Oodle DLL, so point the loader at this
+    # file's folder chain for the duration of the parse. A failure here must not
+    # abort parsing of files that have no compressed buffers.
+    try:
+        from dualforge.compression.oodle import set_search_root
 
-    tables = [_read_table(data, i) for i in range(_TABLE_COUNT)]
-    string_dict = _read_string_dict(data, tables[0])
-    names = _read_names(data, tables[1], string_dict)
-    imports = _read_imports(data, tables[2], string_dict, names)
-    chunks = _read_exports(data, tables[4], names, objects_end)
-    buffers = _read_buffers(data, tables[5], buffers_end)
+        set_search_root(path)
+    except ImportError:
+        set_search_root = None  # type: ignore[assignment]
 
-    if num_chunks and len(chunks) != num_chunks:
-        raise Cr2wError(f"chunk count mismatch: header says {num_chunks}, table has {len(chunks)}")
+    try:
+        (
+            version,
+            flags,
+            time_stamp,
+            build_version,
+            objects_end,
+            buffers_end,
+            header_crc,
+            num_chunks,
+        ) = _HEADER.unpack_from(data, 4)
 
-    return Cr2wFile(
-        path=path,
-        version=version,
-        flags=flags,
-        time_stamp=time_stamp,
-        build_version=build_version,
-        objects_end=objects_end,
-        buffers_end=buffers_end,
-        header_crc32=header_crc,
-        names=names,
-        imports=imports,
-        chunks=chunks,
-        buffers=buffers,
-    )
+        tables = [_read_table(data, i) for i in range(_TABLE_COUNT)]
+        string_dict = _read_string_dict(data, tables[0])
+        names = _read_names(data, tables[1], string_dict)
+        imports = _read_imports(data, tables[2], string_dict, names)
+        chunks = _read_exports(data, tables[4], names, objects_end)
+        buffers = _read_buffers(data, tables[5], buffers_end)
+
+        if num_chunks and len(chunks) != num_chunks:
+            raise Cr2wError(
+                f"chunk count mismatch: header says {num_chunks}, "
+                f"table has {len(chunks)}"
+            )
+
+        return Cr2wFile(
+            path=path,
+            version=version,
+            flags=flags,
+            time_stamp=time_stamp,
+            build_version=build_version,
+            objects_end=objects_end,
+            buffers_end=buffers_end,
+            header_crc32=header_crc,
+            names=names,
+            imports=imports,
+            chunks=chunks,
+            buffers=buffers,
+        )
+    finally:
+        if set_search_root is not None:
+            set_search_root(None)
 
 
 def load_cr2w(path: str | Path) -> Cr2wFile:
@@ -350,8 +367,14 @@ def _read_buffers(
     return buffers
 
 
+#: Reused across buffers so a file with many KARK buffers does not re-glob the
+#: filesystem per buffer. Loading is lazy, so this costs nothing at import.
+_oodle = None
+
+
 def _decompress_buffer(raw: bytes, mem_size: int) -> bytes:
     """Decompress a ``KARK``-wrapped buffer, or return the raw bytes."""
+    global _oodle
     if raw[:4] != KARK_MAGIC:
         return raw
     if len(raw) < 8:
@@ -363,7 +386,9 @@ def _decompress_buffer(raw: bytes, mem_size: int) -> bytes:
     try:
         from dualforge.compression.oodle import Oodle
 
-        return Oodle().decompress(payload, expected or mem_size)
+        if _oodle is None:
+            _oodle = Oodle()
+        return _oodle.decompress(payload, expected or mem_size)
     except ImportError as exc:
         raise Cr2wError(
             "KRAK/Oodle decompression unavailable; set DUALFORGE_OODLE to oo2core_*.dll (never bundled with DualForge)"

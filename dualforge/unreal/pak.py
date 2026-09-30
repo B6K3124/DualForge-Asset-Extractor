@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import glob
 import logging
-import os
-import sys
 import threading
-import types
 from pathlib import Path
 
 from dualforge.constants import PAK_MAGIC
@@ -18,118 +14,41 @@ class PakError(Exception):
     pass
 
 
-class _OodleContext(threading.local):
-    archive_path: str | None = None
-
-
-_oodle_ctx = _OodleContext()
-
-
-class _GameOodle:
-    """Lazy Oodle decompressor backed by a locally-provided oo2core DLL.
-
-    pyuepak's ``oodle`` submodule fetches ``oo2core_9_win64.dll`` from the
-    internet at import time. DualForge's policy is that the Oodle DLL is never
-    bundled and never downloaded - it always comes from the game itself. We
-    pre-register a stub module in ``sys.modules`` before the pyuepak package
-    is imported, so pyuepak uses this lazy resolver instead. The resolver
-    searches the open archive's directory chain first (the DLL usually sits
-    next to the game), then the usual locations.
-    """
-
-    def decompress(self, data: bytes, output_size: int) -> bytes:
-        path = _find_game_oodle(_oodle_ctx.archive_path)
-        if path is None:
-            raise PakError(
-                "This pak uses Oodle compression and requires the game's "
-                "oo2core_*.dll. Searched: the pak's own folder chain, the "
-                "working directory, ~/.dualforge and PATH. Copy the DLL from "
-                "the game's Binaries/Win64 folder into ~/.dualforge if needed."
-            )
-        from dualforge.compression.oodle import Oodle
-
-        return Oodle(dll_path=str(path)).decompress(data, output_size)
-
-
-class _OodleInitializationFailed(Exception):
-    pass
-
-
-def _make_oodle_stub(module_name: str = "pyuepak.oodle") -> types.ModuleType:
-    """Build a stand-in for pyuepak's ``oodle`` module.
-
-    Works in source and frozen (PyInstaller) environments alike - no files are
-    read from disk, so it cannot trigger the DLL download.
-    """
-    module = types.ModuleType(module_name)
-
-    def fetch_oodle() -> Path:
-        raise _OodleInitializationFailed(
-            "no local oo2core_*.dll found; supply the game's Oodle DLL"
-        )
-
-    module.fetch_oodle = fetch_oodle
-    module.InitializationFailed = _OodleInitializationFailed
-    module.oodle = lambda: _GameOodle()
-    return module
-
-
-def _preload_oodle_patch() -> None:
-    if "pyuepak.oodle" not in sys.modules:
-        sys.modules["pyuepak.oodle"] = _make_oodle_stub()
-
-
-_OODLE_PATTERNS = ("oo2core_*_win64.dll", "oo2core_*_linux64.so", "oo2core_*_mac64.dylib")
-
-
-def _find_game_oodle(archive_path: str | None = None) -> Path | None:
-    """Locate a game-shipped Oodle DLL.
-
-    Search order: the open archive's folder chain (up to 3 parent levels plus
-    common Binaries subpaths - the DLL ships next to the game executable),
-    then the working directory, ~/.dualforge, and PATH.
-    """
-    seen: set = set()
-    dirs: list[str] = []
-    if archive_path:
-        current = Path(archive_path).resolve().parent
-        for _ in range(3):
-            dirs.append(str(current))
-            for sub in ("Binaries/Win64", "Binaries/Win32", "Engine/Binaries/Win64", "Binaries/ThirdParty/Oodle/Win64"):
-                dirs.append(str(current / sub))
-            if current.parent == current:
-                break
-            current = current.parent
-    dirs += [os.getcwd(), os.path.expanduser("~/.dualforge")]
-    dirs += [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
-    for d in dirs:
-        for pattern in _OODLE_PATTERNS:
-            for path in glob.glob(os.path.join(d, pattern)):
-                key = os.path.abspath(path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                try:
-                    if Path(path).is_file():
-                        return Path(path)
-                except OSError:
-                    continue
-    return None
-
-
 def _import_pyuepak():
-    _preload_oodle_patch()
+    """Return the vendored ``PakFile`` class.
+
+    DualForge vendors a patched copy of pyuepak (see ``dualforge/vendor``) so
+    that Zstd / LZ4 / Brotli paks decode natively and so that a footer read
+    failure reports its real cause instead of being reported as an encryption
+    failure. The vendored Oodle binding is lazy and network-free, so importing
+    it never downloads a DLL.
+    """
     try:
-        from pyuepak import PakFile
-    except ImportError as exc:
+        from dualforge.vendor.pyuepak import PakFile
+    except ImportError as exc:  # pragma: no cover - broken install
         raise PakError(
-            "pyuepak is required for native .pak support (pip install pyuepak)"
+            "the vendored pak reader (dualforge.vendor.pyuepak) could not be "
+            "imported; the DualForge installation looks incomplete"
         ) from exc
     logging.getLogger("pyuepak").disabled = True
     return PakFile
 
 
-_preload_oodle_patch()
+def _find_game_oodle(archive_path: str | None = None) -> Path | None:
+    """Locate a game-shipped Oodle DLL.
+
+    Thin wrapper over the one loader in :mod:`dualforge.compression.oodle` so
+    both the pak reader and the rest of DualForge agree on where the DLL is
+    looked for. Returns None when nothing is found; the caller decides how to
+    report that.
+    """
+    from dualforge.compression.oodle import find_oodle_dll, set_search_root
+
+    set_search_root(archive_path)
+    try:
+        return find_oodle_dll()
+    finally:
+        set_search_root(None)
 
 
 def _probe_key_list(aes_key: str | None, try_all_keys: bool) -> list[tuple]:
@@ -228,9 +147,23 @@ class PakArchive:
         self._entries: dict[str, int] = self._read_sizes()
 
     def _open(self, PakFile, aes_key: str | None, try_all_keys: bool):
+        from dualforge.compression.oodle import set_search_root
+        from dualforge.vendor.pyuepak.utils import (
+            UnsupportedCompressionMethod,
+            UnsupportedPakVersion,
+        )
+
         probes = _probe_key_list(aes_key, try_all_keys)
-        attempts = []
-        _oodle_ctx.archive_path = self.path
+        attempts: list[str] = []
+
+        # Structural failures (unsupported pak version, unreadable footer,
+        # unsupported compression) are independent of which key we try, so the
+        # first one aborts the probe loop instead of being retried once per
+        # stored key and then mislabelled as an encryption problem.
+        last_error: Exception | None = None
+        encryption_failures = 0
+
+        set_search_root(self.path)
         try:
             for title, key, can_set in probes:
                 attempts.append(title or "no key")
@@ -242,34 +175,47 @@ class PakArchive:
                         raise PakError(f"invalid AES key: {exc}") from exc
                 try:
                     pak.read(self.path)
-                except Exception:
-                    logger.debug("key %r did not open %s", title, self.path, exc_info=True)
+                except (UnsupportedPakVersion, UnsupportedCompressionMethod) as exc:
+                    # Structural: the archive is not one this reader can parse.
+                    # Surface the real reason instead of the misleading
+                    # "may be encrypted", but keep it a PakError so callers have
+                    # one exception type to catch.
+                    raise PakError(str(exc)) from exc
+                except Exception as exc:
+                    last_error = exc
+                    encryption_failures += 1
+                    logger.debug(
+                        "key %r did not open %s", title, self.path, exc_info=True
+                    )
                     continue
                 if pak.count == 0:
+                    last_error = None
                     continue
                 self._pak_footer = getattr(pak, "_footer", None)
                 if self._pak_footer is not None:
                     self.version = getattr(self._pak_footer, "version", 0)
-                    self.is_encrypted = bool(getattr(self._pak_footer, "is_encrypted", False))
+                    self.is_encrypted = bool(
+                        getattr(self._pak_footer, "is_encrypted", False)
+                    )
                 if title:
                     self.key_title = title
-                    self.key_source = "key store" if title != "default" else "default key"
+                    self.key_source = (
+                        "key store" if title != "default" else "default key"
+                    )
                 return pak
         finally:
-            _oodle_ctx.archive_path = None
+            set_search_root(None)
+
         tried = ", ".join(attempts)
-        chunk_hint = ""
-        footer_hint = pak_footer_version(self.path)
-        if footer_hint and footer_hint >= 13:
-            chunk_hint = (
-                "\n\nThis pak looks like a UE 5.4+ archive. Newer games may use "
-                "per-chunk encryption keys, which require a CUE4Parse-based CLI "
-                "for full support (DualForge falls back to it automatically)."
-            )
+
+        # The archive parsed structurally but no key unlocked it, or it failed
+        # in a way that only keys could explain. Say so, and keep the real
+        # exception for context.
+        detail = f" (last error: {last_error})" if last_error else ""
         raise PakError(
             f"failed to read the pak index with {len(probes) - 1} key(s) tried "
             f"({tried}). The archive may be encrypted - add its key via "
-            f"File > Manage Keys or paste it into Settings.{chunk_hint}"
+            f"File > Manage Keys or paste it into Settings.{detail}"
         )
 
     def _read_sizes(self) -> dict[str, int]:
@@ -292,20 +238,25 @@ class PakArchive:
         return self._entries.get(path, 0)
 
     def read_file(self, path: str) -> bytes:
+        from dualforge.compression.oodle import set_search_root
+        from dualforge.vendor.pyuepak.utils import UnsupportedCompressionMethod
+
         with self._lock:
             candidates = [path, path.lstrip("/")]
-            _oodle_ctx.archive_path = self.path
+            set_search_root(self.path)
             try:
                 for candidate in candidates:
                     try:
                         return self._pak.read_file(candidate)
                     except KeyError:
                         continue
+                    except UnsupportedCompressionMethod as exc:
+                        raise PakError(str(exc)) from exc
                     except Exception as exc:
                         raise PakError(f"failed to read '{path}' from pak: {exc}") from exc
                 raise PakError(f"file not found in pak: {path}")
             finally:
-                _oodle_ctx.archive_path = None
+                set_search_root(None)
 
     def extract_file(self, path: str, out_dir: str) -> str:
         from dualforge.export.exporter import write_entry

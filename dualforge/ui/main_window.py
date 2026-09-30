@@ -603,9 +603,13 @@ class MainWindow(QMainWindow):
             try:
                 return self._load_unreal_native(path, root)
             except PakError as exc:
-                self.log.appendPlainText(f"native pak read failed ({exc}); falling back to CLI...")
+                self.log.appendPlainText(
+                    f"native pak read failed ({exc}); falling back to uex/CUE4Parse..."
+                )
             except ImportError:
-                self.log.appendPlainText("pyuepak unavailable; falling back to CLI...")
+                self.log.appendPlainText(
+                    "native pak reader unavailable; falling back to uex/CUE4Parse..."
+                )
         return self._load_unreal_bridge(path, root)
 
     def _load_unreal_native(self, path: str, root: QTreeWidgetItem | None = None) -> int:

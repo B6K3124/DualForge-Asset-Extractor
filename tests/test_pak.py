@@ -5,12 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from dualforge.unreal.pak import PakArchive, PakError, _import_pyuepak, _preload_oodle_patch
+from dualforge.unreal.pak import PakArchive, PakError, _import_pyuepak
 
-_preload_oodle_patch()
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("pyuepak") is None,
-    reason="pyuepak not installed",
+    importlib.util.find_spec("dualforge.vendor.pyuepak") is None,
+    reason="vendored pyuepak not importable",
 )
 
 
@@ -22,7 +21,7 @@ def PakFile():
 @pytest.fixture()
 def pak_path(tmp_path: Path, PakFile) -> str:
     """Write a small, unencrypted pak fixture using pyuepak itself."""
-    import pyuepak.version as version
+    from dualforge.vendor.pyuepak import version
 
     target = str(tmp_path / "test.pak")
     pak = PakFile()
@@ -37,7 +36,7 @@ def pak_path(tmp_path: Path, PakFile) -> str:
 def test_import_does_not_download_oodle(PakFile):
     import sys
 
-    module = sys.modules["pyuepak.oodle"]
+    module = sys.modules["dualforge.vendor.pyuepak.oodle"]
     stub = module.oodle()
     assert hasattr(stub, "decompress")
 
@@ -94,7 +93,7 @@ def test_open_garbage_raises(tmp_path: Path):
 )
 def test_pak_version_matrix(tmp_path: Path, PakFile, version_name: str, label: str):
     """Every engine-era pak version must write AND read back natively."""
-    import pyuepak.version as version
+    from dualforge.vendor.pyuepak import version
 
     pak = PakFile()
     pak.set_version(getattr(version.PakVersion, version_name))

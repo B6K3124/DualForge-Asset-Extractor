@@ -15,8 +15,8 @@ from dualforge.unreal.pak import (
 )
 
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("pyuepak") is None,
-    reason="pyuepak not installed",
+    importlib.util.find_spec("dualforge.vendor.pyuepak") is None,
+    reason="vendored pyuepak not importable",
 )
 
 
@@ -209,7 +209,7 @@ def PakFile():
 
 
 def test_pak_footer_version_reads_v12(tmp_path: Path, PakFile):
-    import pyuepak.version as version
+    from dualforge.vendor.pyuepak import version
 
     target = str(tmp_path / "v12.pak")
     pak = PakFile()
@@ -226,7 +226,7 @@ def test_pak_footer_version_garbage(tmp_path: Path):
 
 
 def test_chunk_key_hint_for_v12(tmp_path: Path, PakFile):
-    import pyuepak.version as version
+    from dualforge.vendor.pyuepak import version
 
     from dualforge.extract import _chunk_key_hint
 

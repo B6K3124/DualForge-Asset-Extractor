@@ -17,8 +17,8 @@ sys.modules[_spec.name] = gkf
 _spec.loader.exec_module(gkf)
 
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("pyuepak") is None,
-    reason="pyuepak not installed",
+    importlib.util.find_spec("dualforge.vendor.pyuepak") is None,
+    reason="vendored pyuepak not importable",
 )
 
 

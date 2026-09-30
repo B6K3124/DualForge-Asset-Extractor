@@ -20,7 +20,7 @@ hiddenimports += ["cryptography"]
 hiddenimports += _crypt_hidden
 hiddenimports += collect_submodules("dualforge")
 hiddenimports += collect_submodules("UnityPy")
-hiddenimports += collect_submodules("pyuepak")
+hiddenimports += collect_submodules("dualforge.vendor.pyuepak")
 hiddenimports += collect_submodules("py7zr")
 hiddenimports += ["requests"]
 

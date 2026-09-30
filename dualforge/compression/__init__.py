@@ -198,10 +198,24 @@ def _extract_7z(data: bytes, member: str | None) -> bytes:
 
 
 def compress(data: bytes, method: str, level: int | None = None) -> bytes:
-    """Compress with the given method (zstd/brotli only)."""
+    """Compress with the given method.
+
+    Supports none/zlib/gzip/lz4/zstd/brotli. Used by the vendored pak writer to
+    produce compressed-pak fixtures, so the read path has something real to
+    round-trip against.
+    """
     method = (method or "none").lower()
     if method == "none":
         return data
+    if method == "zlib":
+        return zlib.compress(data, level if level is not None else 6)
+    if method == "gzip":
+        return gzip.compress(data, compresslevel=level if level is not None else 6)
+    if method == "lz4":
+        # Unreal's pak "LZ4" is the raw block format, not the framed one.
+        return _lz4_block().compress(
+            data, compression_level=level if level is not None else 9
+        )
     if method == "zstd":
         level = level or 19
         compressor = _zstandard().ZstdCompressor(level=level)

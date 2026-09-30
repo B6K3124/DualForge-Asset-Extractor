@@ -17,41 +17,13 @@ if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
 
 python -m pip install -e .
 
-# Policy guard: pyuepak's Oodle DLL must never be bundled or downloaded.
-# 1) Remove any stray oo2core_*.dll that a direct import left in site-packages.
-# 2) Swap pyuepak's oodle.py for our stub during Analysis: PyInstaller's module
-#    graph ignores sys.modules and executes the real oodle.py, which downloads
-#    the DLL at import time. The stub is restored afterwards.
-$pyuepakDir = python -c "import importlib.util; print(importlib.util.find_spec('pyuepak').submodule_search_locations[0])"
-Get-ChildItem -Path $pyuepakDir -Filter "oo2core*" -ErrorAction SilentlyContinue |
-    ForEach-Object {
-        Write-Host "Removing stray Oodle DLL from pyuepak package: $($_.Name)"
-        Remove-Item $_.FullName -Force
-    }
-
-$oodleFile = Join-Path $pyuepakDir "oodle.py"
-$oodleBak = "$oodleFile.dualforgebak"
-if (Test-Path $oodleFile) {
-    Copy-Item $oodleFile $oodleBak -Force
-    Copy-Item (Join-Path $root "scripts\pyuepak_oodle_stub.py") $oodleFile -Force
-    Write-Host "Swapped pyuepak oodle.py for the stub during analysis..."
-}
-
-try {
-    Write-Host "Building DualForge..."
-    python -m PyInstaller dualforge.spec --noconfirm --clean
-} finally {
-    if (Test-Path $oodleBak) {
-        Copy-Item $oodleBak $oodleFile -Force
-        Remove-Item $oodleBak -Force
-        Write-Host "Restored original pyuepak oodle.py"
-    }
-}
-
-# Remove any Oodle DLL the analysis could have re-created, and verify the build
-# output contains none.
-Get-ChildItem -Path $pyuepakDir -Filter "oo2core*" -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
+# Policy guard: the Oodle DLL must never be bundled or downloaded.
+# The reader (dualforge/compression/oodle.py) performs no network access and
+# loads lazily, so no module-graph stubbing is needed any more - the old
+# pyuepak oodle.py swap existed only because upstream downloaded the DLL at
+# import time. We assert the property rather than assume it.
+Write-Host "Building DualForge..."
+python -m PyInstaller dualforge.spec --noconfirm --clean
 
 # Policy guard: verify the build output contains no Oodle DLL.
 $bundled = Get-ChildItem -Path "dist\DualForge" -Recurse -Filter "oo2core*" -ErrorAction SilentlyContinue

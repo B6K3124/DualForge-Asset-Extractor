@@ -66,6 +66,24 @@ class RedError(Exception):
     """Raised when a REDengine archive cannot be parsed or extracted."""
 
 
+#: Reused across blocks so a large bundle does not re-glob the filesystem for
+#: the DLL once per block. Loading is lazy, so this costs nothing at import.
+_oodle = None
+
+
+def _decompress_kark(payload: bytes, expected_size: int) -> bytes:
+    """Decompress a raw Oodle Kraken payload."""
+    global _oodle
+    try:
+        from dualforge.compression.oodle import Oodle
+
+        if _oodle is None:
+            _oodle = Oodle()
+        return _oodle.decompress(payload, expected_size)
+    except Exception as exc:
+        raise RedError(f"KARK decompression failed: {exc}") from exc
+
+
 @dataclass
 class _Segment:
     offset: int
@@ -255,24 +273,28 @@ class RedArchive:
 
         return raw
 
-    @staticmethod
-    def _decompress_kark(block: bytes, expected_size: int) -> bytes:
+    def _decompress_kark(self, block: bytes, expected_size: int) -> bytes:
         """Decompress a KARK (Kraken) block.
 
         Layout: ``[4: KARK][4: decompressed_size LE][compressed payload...]``
         The compressed payload is a raw Oodle Kraken stream.
+
+        The search root is set to this bundle so the loader can find the game's
+        own ``oo2core_*.dll``; without it only ``DUALFORGE_OODLE`` and
+        ``~/.dualforge`` would be searched.
         """
         if len(block) < 8:
             raise RedError("KARK block too small")
         payload = block[8:]
         if not payload:
             raise RedError("KARK block has no compressed payload")
-        try:
-            from dualforge.compression.oodle import Oodle
+        from dualforge.compression.oodle import set_search_root
 
-            return Oodle().decompress(payload, expected_size)
-        except Exception as exc:
-            raise RedError(f"KARK decompression failed: {exc}") from exc
+        set_search_root(self.path)
+        try:
+            return _decompress_kark(payload, expected_size)
+        finally:
+            set_search_root(None)
 
     @staticmethod
     def _hash_to_name(hash_int: int) -> str:

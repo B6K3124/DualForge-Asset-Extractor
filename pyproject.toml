@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dualforge"
-version = "1.0.0"
-description = "Universal Unity + Unreal game asset extraction toolkit (PySide6)"
+version = "1.0.1"
+description = "Multi-engine game asset extraction toolkit (PySide6)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -26,7 +26,6 @@ dependencies = [
     "brotli>=1.1",
     "py7zr>=0.20",
     "requests>=2.31",
-    "pyuepak>=0.2.8",
     "cryptography>=42",
 ]
 
@@ -55,3 +54,10 @@ line-length = 120
 # correctness, and readability simplifications. Intentional deviations are
 # annotated with inline `# noqa` + a reason comment.
 select = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored third-party code (MIT, see dualforge/vendor/NOTICE.md) is kept as
+# close to upstream as possible so it can be re-synced against pyuepak. Linting
+# it would mean reformatting upstream code and defeating that. Our own patches
+# in these files are still covered by the test suite.
+"dualforge/vendor/pyuepak/*" = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]
