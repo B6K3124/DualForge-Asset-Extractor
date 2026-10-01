@@ -27,6 +27,17 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _oodle_available() -> bool:
+    """The Oodle DLL comes from the user's own game install, never DualForge.
+
+    CI runners have no game installs, so Oodle decode assertions are skipped
+    when no ``oo2core_*.dll`` is discoverable.
+    """
+    from dualforge.compression.oodle import find_oodle_dll
+
+    return find_oodle_dll() is not None
+
+
 def _paks(engine: str) -> list[Path]:
     return sorted((FIXTURES / engine).rglob("*.pak"))
 
@@ -44,16 +55,19 @@ def test_unencrypted_paks_open_and_extract(engine: str) -> None:
     bytes, so the payload is compared against the matching uncompressed fixture.
     """
     opened = 0
+    oodle = _oodle_available()
     for pak in _paks(engine):
         if "Encrypted" in _rel(pak):
             continue
         archive = PakArchive(str(pak))
         files = archive.list_files()
         assert files, f"{_rel(pak)} listed no files"
+        opened += 1
+        if archive.uses_oodle and not oodle:
+            continue
         for name in files:
             data = archive.read_file(name)
             assert isinstance(data, bytes)
-        opened += 1
     assert opened >= 4, f"expected several {engine} fixtures, got {opened}"
 
 
@@ -96,6 +110,8 @@ def test_oodle_matches_uncompressed_twin(engine: str) -> None:
     )
     if not (oodle_pak.is_file() and plain_pak.is_file()):
         pytest.skip(f"no Oodle/Uncompressed pair for {engine}")
+    if not _oodle_available():
+        pytest.skip("no oo2core_*.dll available; Oodle decode untestable")
     o = PakArchive(str(oodle_pak))
     p = PakArchive(str(plain_pak))
     assert o.list_files() == p.list_files()

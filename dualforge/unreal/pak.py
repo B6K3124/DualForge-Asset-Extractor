@@ -237,6 +237,23 @@ class PakArchive:
     def size_of(self, path: str) -> int:
         return self._entries.get(path, 0)
 
+    @property
+    def uses_oodle(self) -> bool:
+        """True when the archive declares Oodle-compressed entries.
+
+        The library is never bundled, so callers usually combine this with
+        ``find_oodle_dll()`` to decide whether Oodle payloads can be decoded.
+        """
+        footer = getattr(self, "_pak_footer", None)
+        if footer is None:
+            return False
+        try:
+            from dualforge.vendor.pyuepak.utils import COMPRESSION
+
+            return COMPRESSION.OODLE in (getattr(footer, "compresion", ()) or ())
+        except Exception:
+            return False
+
     def read_file(self, path: str) -> bytes:
         from dualforge.compression.oodle import set_search_root
         from dualforge.vendor.pyuepak.utils import UnsupportedCompressionMethod
