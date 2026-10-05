@@ -562,7 +562,27 @@ class MainWindow(QMainWindow):
                     hint=f"Engine '{detection.engine}' is not supported yet.",
                 )
         except Exception as exc:
-            QMessageBox.warning(self, "DualForge", f"Failed to read archive:\n{exc}")
+            msg = str(exc)
+            box = QMessageBox(self)
+            box.setWindowTitle("DualForge")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText(f"Failed to read archive:\n{msg}")
+            manage = box.addButton("Manage Keys...", QMessageBox.ButtonRole.ActionRole)
+            oodle = box.addButton("Find Oodle DLL...", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+            box.exec()
+            if box.clickedButton() is manage:
+                self.manage_keys()
+            elif box.clickedButton() is oodle:
+                dll = self._find_and_set_oodle()
+                if dll:
+                    QMessageBox.information(self, "DualForge", f"Found Oodle DLL:\n{dll}")
+                else:
+                    from PySide6.QtWidgets import QFileDialog
+                    picked, _ = QFileDialog.getOpenFileName(self, "Locate oo2core_*.dll", str(Path.home() / ".dualforge"), "Oodle DLL (oo2core_*.dll)")
+                    if picked:
+                        self._set_oodle_path(picked)
+                        QMessageBox.information(self, "DualForge", f"Oodle DLL set:\n{picked}")
             self.log.appendPlainText(f"error: {exc}")
         self._apply_filter()
 
@@ -1627,6 +1647,29 @@ class MainWindow(QMainWindow):
             "USMAP mappings (*.usmap)",
         )
         return picked or None
+
+
+
+    def _set_oodle_path(self, dll_path: str | None) -> None:
+        import contextlib
+        with contextlib.suppress(Exception):
+            if dll_path:
+                os.environ["DUALFORGE_OODLE"] = dll_path
+            elif "DUALFORGE_OODLE" in os.environ:
+                del os.environ["DUALFORGE_OODLE"]
+
+    def _find_and_set_oodle(self) -> str | None:
+        from dualforge.compression.oodle import find_oodle_in_games, set_search_root
+
+        found = find_oodle_in_games()
+        if found:
+            dll = str(found[0])
+            import contextlib
+            with contextlib.suppress(Exception):
+                os.environ["DUALFORGE_OODLE"] = dll
+            set_search_root(None)
+            return dll
+        return None
 
     def open_drivers(self) -> None:
         from dualforge.ui.drivers_dialog import DriversDialog

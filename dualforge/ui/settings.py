@@ -40,6 +40,11 @@ class Settings:
     recent_files: list[str] = field(default_factory=list)
     recent_folders: list[str] = field(default_factory=list)
     last_output_dir: str = ""
+    export_regex_include: str = ""
+    export_regex_exclude: str = ""
+    export_presets: list[dict] = field(default_factory=list)
+    window_state: str = ""
+    window_geometry: str = ""
     window_state: str = ""
     _path: str = field(default="", repr=False, compare=False)
 

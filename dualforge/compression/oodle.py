@@ -27,6 +27,7 @@ __all__ = [
     "OodleDecompressError",
     "OodleUnavailableError",
     "find_oodle_dll",
+    "find_oodle_in_games",
     "set_search_root",
 ]
 
@@ -295,3 +296,30 @@ class Oodle:
             f"(output_size={output_size}); the DLL may be incompatible with this "
             f"archive. Last error: {last_error}"
         )
+
+
+def find_oodle_in_games() -> list[Path]:
+    """Scan common game install locations for oo2core_*.dll (Windows)."""
+    found: list[Path] = []
+    seen = set()
+    for root in _candidate_dirs():
+        try:
+            root_p = Path(root)
+            if not root_p.exists():
+                continue
+            # deep search but limit depth
+            for pattern in OODLE_PATTERNS:
+                try:
+                    for path in root_p.rglob(pattern):
+                        try:
+                            p = path.resolve()
+                            if p.is_file() and str(p) not in seen:
+                                seen.add(str(p))
+                                found.append(p)
+                        except OSError:
+                            continue
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return found
