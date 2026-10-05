@@ -400,7 +400,7 @@ class HeroPage(QWidget):
         self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.subtitle.setProperty("role", "hero-subtitle")
         layout.addWidget(self.subtitle)
-        self.hint = QLabel("Open an archive to browse, preview, and extract game assets.")
+        self.hint = QLabel("Drop a .pak/.utoc/.ucas or folder here, or click Open Archive...\nQuick: Tekken 8 · Oblivion Remastered · Starfield")
         self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hint.setProperty("role", "hero-subtitle")
         layout.addWidget(self.hint)

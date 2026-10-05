@@ -134,8 +134,25 @@ def _candidate_dirs() -> list[str]:
                 break
             current = current.parent
 
-    dirs.append(str(Path.home() / ".dualforge"))
     dirs.append(str(Path(__file__).resolve().parent))
+    # Common game installs (Windows)
+    home = Path.home()
+    dirs.extend(
+        [
+            str(home / ".dualforge"),
+            str(Path("C:/Program Files (x86)/Steam/steamapps/common")),
+            str(Path("C:/Program Files/Steam/steamapps/common")),
+            str(Path("C:/SteamLibrary/steamapps/common")),
+            str(Path("D:/SteamLibrary/steamapps/common")),
+            str(Path("E:/SteamLibrary/steamapps/common")),
+            str(Path("F:/SteamLibrary/steamapps/common")),
+            str(Path("C:/Program Files/Epic Games")),
+            str(Path("C:/Program Files (x86)/Epic Games")),
+            str(Path("C:/Program Files/GOG Galaxy/Games")),
+            str(Path("C:/Program Files (x86)/GOG Galaxy/Games")),
+            str(Path("C:/GOG Games")),
+        ]
+    )
 
     seen: set[str] = set()
     out: list[str] = []

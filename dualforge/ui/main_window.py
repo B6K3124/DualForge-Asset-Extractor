@@ -442,6 +442,11 @@ class MainWindow(QMainWindow):
         text = f'driver: <a href="drivers" style="color:#e0a53c;">{name}</a>'
         if detail:
             text += f' <span style="color:#c8cbd8;">· {escape(detail)}</span>'
+        egame = getattr(driver, "egame", None)
+        if egame:
+            text += f' <span style="color:#a3b7d0;">· egame:{escape(egame)}</span>'
+        if getattr(driver, "usmap_required", False):
+            text += ' <span style="color:#d0a34f;">· usmap required</span>'
         self.driver_badge.setText(text)
         self.driver_badge.setStyleSheet("")
         self.driver_badge.setToolTip(
@@ -833,6 +838,12 @@ class MainWindow(QMainWindow):
             )
         if not folder:
             return
+        try:
+            self.settings.add_recent_folder(folder)
+            self.settings.save()
+            self._rebuild_recent()
+        except Exception:
+            pass
         self._reset_session(folder_mode=True)
         self.current_path = folder
         self._set_engine(None)
@@ -1307,6 +1318,12 @@ class MainWindow(QMainWindow):
         if not out_dir:
             return
         self._last_out_dir = out_dir
+        try:
+            self.settings.last_output_dir = out_dir
+            self.settings.default_out_dir = out_dir
+            self.settings.save()
+        except Exception:
+            pass
         self.log.clear()
         self._progress_bar = QProgressBar()
         self._progress_bar.setVisible(False)
@@ -1365,9 +1382,18 @@ class MainWindow(QMainWindow):
         if errors:
             text += f"\n\n{len(errors)} warning(s) - see log."
         box.setText(text)
+        open_btn = box.addButton("Open Output Folder", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         open_btn = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
+        if box.clickedButton() is open_btn and self._last_out_dir:
+            try:
+                from PySide6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_out_dir))
+            except Exception:
+                QMessageBox.information(self, "DualForge", f"Output folder: {self._last_out_dir}")
+
         if box.clickedButton() is open_btn and self._last_out_dir:
             self._open_folder(self._last_out_dir)
 
@@ -1568,14 +1594,16 @@ class MainWindow(QMainWindow):
         """Ask the user how to obtain the .usmap a driver requires.
 
         Returns ``"generate"``, ``"pick"`` or ``"skip"``."""
-        title = Path(path).name
         box = QMessageBox(self)
         box.setWindowTitle("USMAP required")
         box.setIcon(QMessageBox.Icon.Question)
         box.setText(
             f"<b>{driver.label}</b> uses unversioned UE5 packages, which need a "
             "CUE4Parse mappings file (<code>.usmap</code>). No mappings file was "
-            "found for <b>{0}</b>.".format(escape(title))
+            f"found for <b>{escape(Path(path).name)}</b>.<br><br>"
+            "<i>Tip:</i> You can generate one from a running UE5 game (Tools → Generate USMAP) "
+            "or pick an existing <code>.usmap</code> file. See Help → Video Game Compatibility "
+            "for details."
         )
         generate = box.addButton("Generate from running game", QMessageBox.ButtonRole.AcceptRole)
         pick = box.addButton("Choose existing .usmap...", QMessageBox.ButtonRole.ActionRole)
@@ -1628,7 +1656,14 @@ class MainWindow(QMainWindow):
             action = self._recent_menu.addAction(label)
             action.setToolTip(str(path))
             action.triggered.connect(lambda checked=False, p=str(path): self._load(p))
-        if not files:
+        folders = [Path(p) for p in self.settings.recent_folders]
+        if folders:
+            self._recent_menu.addSeparator()
+            for path in folders:
+                action = self._recent_menu.addAction(f"{path.name}/")
+                action.setToolTip(str(path))
+                action.triggered.connect(lambda checked=False, p=str(path): self.open_folder(p))
+        if not files and not folders:
             empty = self._recent_menu.addAction("(no recent archives)")
             empty.setEnabled(False)
 
@@ -1660,20 +1695,42 @@ class MainWindow(QMainWindow):
             return
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path and is_supported_archive(path):
+            if not path:
+                continue
+            p = Path(path)
+            if p.is_dir():
+                event.acceptProposedAction()
+                return
+            if is_supported_archive(path):
                 event.acceptProposedAction()
                 return
 
     def dropEvent(self, event) -> None:
         urls = event.mimeData().urls()
-        paths = [url.toLocalFile() for url in urls if url.toLocalFile() and is_supported_archive(url.toLocalFile())]
+        paths = []
+        for url in urls:
+            f = url.toLocalFile()
+            if not f:
+                continue
+            p = Path(f)
+            if p.is_dir():
+                paths.append(f)
+                continue
+            if is_supported_archive(f):
+                paths.append(f)
         if not paths:
-            self.log.appendPlainText("dropped non-archive file(s); only game archives are accepted")
+            self.log.appendPlainText("dropped non-archive/non-folder file(s); only game archives or folders are accepted")
             return
-        if len(paths) == 1:
-            self._load(paths[0])
+        dirs = [d for d in paths if Path(d).is_dir()]
+        files = [d for d in paths if Path(d).is_file()]
+        if dirs:
+            # prefer first dropped dir; otherwise merge
+            self.open_folder(dirs[0])
+            return
+        if len(files) == 1:
+            self._load(files[0])
         else:
-            self.open_folder_from_paths(paths)
+            self.open_folder_from_paths(files)
 
     def open_folder_from_paths(self, paths: list[str]) -> None:
         folder = str(Path(paths[0]).parent)

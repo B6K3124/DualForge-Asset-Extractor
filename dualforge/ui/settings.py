@@ -38,7 +38,8 @@ class Settings:
     export_formats: dict[str, str] = field(default_factory=dict)
     profiles: list[dict] = field(default_factory=list)
     recent_files: list[str] = field(default_factory=list)
-    window_geometry: str = ""
+    recent_folders: list[str] = field(default_factory=list)
+    last_output_dir: str = ""
     window_state: str = ""
     _path: str = field(default="", repr=False, compare=False)
 
@@ -61,6 +62,12 @@ class Settings:
             self.recent_files.remove(path)
         self.recent_files.insert(0, path)
         del self.recent_files[10:]
+
+    def add_recent_folder(self, folder: str) -> None:
+        if folder in self.recent_folders:
+            self.recent_folders.remove(folder)
+        self.recent_folders.insert(0, folder)
+        del self.recent_folders[10:]
 
     @classmethod
     def load(cls, path: str | None = None) -> Settings:
