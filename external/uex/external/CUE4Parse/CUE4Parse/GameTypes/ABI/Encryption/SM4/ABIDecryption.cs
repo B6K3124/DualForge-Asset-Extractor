@@ -1,5 +1,7 @@
+using System.Numerics;
 using CUE4Parse.GameTypes.ABI.UE4.Lua;
 using CUE4Parse.UE4.Exceptions;
+using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 using CUE4Parse.UE4.VirtualFileSystem;
 using CUE4Parse.Utils;
@@ -148,5 +150,20 @@ public static class ABIDecryption
         };
 
         Sm4Helper.Decrypt(ref data, key, SM4Mode.B, SboxMode.None);
+    }
+
+    public static long DecodeIndexInfo(ulong encoded, ulong finalXor)
+        => (long) (BitOperations.RotateRight(encoded ^ 0xD72CAC4E59907DA0UL, 23) ^ finalXor);
+
+    public static FSHAHash DecodeIndexHash(Span<byte> hash)
+    {
+        var key = 0xC360A0B3AC0A1368UL;
+        for (var index = 0; index < hash.Length; index++)
+        {
+            hash[index] ^= (byte) (key >> ((index & 7) * 8));
+            key = BitOperations.RotateLeft(key, 7);
+        }
+
+        return new FSHAHash(hash);
     }
 }

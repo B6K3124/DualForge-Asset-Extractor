@@ -27,7 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dualforge.encryption.brute import probe_pak_blocks, validate_key
+from dualforge.encryption.brute import probe_pak_blocks, probe_pak_blocks_file, validate_key
 from dualforge.encryption.presets import PRESETS, GameScheme, guess_scheme
 from dualforge.encryption.registry import list_schemes
 from dualforge.unreal.autodetect import find_game_executable, find_install_root
@@ -196,6 +196,10 @@ def validate_keys_against_pak(
         fh.seek(size - tail_window)
         raw = fh.read(tail_window)
     blocks = probe_pak_blocks(raw, count=block_count)
+    if not blocks:
+        # The tail window can miss an ABI index that lives far from EOF; probe
+        # the archive on disk by seeking to the decoded index offset directly.
+        blocks = probe_pak_blocks_file(pak_path, count=block_count)
     if not blocks:
         return verified
     pak_name = Path(pak_path).name

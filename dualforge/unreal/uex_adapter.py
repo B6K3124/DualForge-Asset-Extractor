@@ -68,6 +68,8 @@ FOLDER_GAMES: list[tuple[str, str]] = [
     ("palworld", "GAME_Palworld"),
     ("tarkov", "GAME_EscapeFromTarkov"),
     ("valorant", "GAME_VALORANT"),
+    ("abinfinit", "GAME_ArenaBreakoutInfinite"),
+    ("arena breakout", "GAME_ArenaBreakoutInfinite"),
 ]
 
 # Map DualForge scheme/preset names to CUE4Parse EGame values so scheme-based
@@ -80,6 +82,7 @@ SCHEME_GAMES: dict[str, str] = {
     "fortnite": "GAME_Fortnite",
     "monster-jam": "GAME_MonsterJamShowdown",
     "dragon-sword": "GAME_DragonSword3",
+    "arena-breakout": "GAME_ArenaBreakoutInfinite",
 }
 
 SEARCH_LIMIT = 1_000_000

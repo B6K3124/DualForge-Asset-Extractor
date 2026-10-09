@@ -1,7 +1,16 @@
 using System.CommandLine;
+using Serilog;
 using Uex;
 using Uex.Config;
 using Uex.Core;
+
+// CUE4Parse logs mount failures/progress through Serilog; without a sink they vanish.
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Warning()
+    .WriteTo.Console(
+        outputTemplate: "[{Level:u3}] {Message:lj}{NewLine}{Exception}",
+        standardErrorFromLevel: Serilog.Events.LogEventLevel.Verbose)
+    .CreateLogger();
 
 var configOption = new Option<string?>("--config") { Description = "Path to profiles.json (default: UEX_PROFILES env, ./profiles.json, exe dir)", Recursive = true };
 var profileOption = new Option<string>("--profile") { Description = "Game profile name from profiles.json", Required = true };

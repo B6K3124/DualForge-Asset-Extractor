@@ -13,6 +13,7 @@ Key-type vocabulary (also mirrored in ``unreal.keys`` ``KeyEntry.scheme``):
 - ``xor``                 repeating-key XOR (Unity bundles, many CN games)
 - ``derived``             key material derived at runtime (Snowbreak, Star Savior)
 - ``unity-cn``            Unity CN Pro 16-char bundle key
+- ``sm4`` / ``sm4-abi``   SM4 with ABI/Tencent key tables (Arena Breakout)
 - ``partial``             partially-encrypted paks (Wuthering Waves / NetEase)
 - per-game pseudo-AES     custom round-key / S-box implementations
 """

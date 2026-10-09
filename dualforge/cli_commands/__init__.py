@@ -9,7 +9,11 @@ in :mod:`dualforge.cli`.
 from __future__ import annotations
 
 from dualforge.cli_commands.codecs import _cmd_codecs
-from dualforge.cli_commands.crack import _cmd_crack_run, _cmd_crack_status
+from dualforge.cli_commands.crack import (
+    _cmd_crack_offline,
+    _cmd_crack_run,
+    _cmd_crack_status,
+)
 from dualforge.cli_commands.detect import _cmd_detect
 from dualforge.cli_commands.drivers import (
     _cmd_drivers_create,
@@ -48,6 +52,7 @@ from dualforge.cli_commands.world import _cmd_world
 
 __all__ = [
     "_cmd_codecs",
+    "_cmd_crack_offline",
     "_cmd_crack_run",
     "_cmd_crack_status",
     "_cmd_detect",

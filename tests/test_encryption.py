@@ -23,6 +23,8 @@ def test_all_schemes_registered():
         "unity-cn",
         "custom-aes-round",
         "delta-force",
+        "sm4",
+        "sm4-abi",
     } <= names
 
 
@@ -108,3 +110,93 @@ def test_scheme_validation_matches_preset_names():
     names = {p.name for p in PRESETS}
     assert "snowbreak" in names
     assert "delta-force" in names
+    assert "arena-breakout" in names
+
+
+# ---------------------------------------------------------------- SM4 / ABI
+
+
+def test_sm4_fips_vector():
+    from dualforge.encryption.schemes.sm4 import sm4_ecb_decrypt
+
+    key = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    plaintext = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    ciphertext = bytes.fromhex("681edf34d206965e86b3e94f536e4246")
+    assert sm4_ecb_decrypt(ciphertext, key, "none") == plaintext
+
+
+def test_sm4_ecb_roundtrip():
+    from dualforge.encryption.schemes.sm4 import sm4_ecb_decrypt, sm4_ecb_encrypt
+
+    key = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+    data = bytes(range(0x40)) + b"tail"
+    block = data[:64]
+    for sbox in ("none", "37", "38", "39"):
+        assert sm4_ecb_decrypt(sm4_ecb_encrypt(block, key, sbox), key, sbox) == block
+    # unaligned tail passes through unchanged
+    out = sm4_ecb_decrypt(block + b"Z", key, "none")
+    assert out[-1:] == b"Z"
+
+
+def test_sm4_abi_key_transform():
+    from dualforge.encryption.schemes.sm4 import sm4_ecb_decrypt, sm4_ecb_encrypt, sm4_transform_key
+    from dualforge.encryption.schemes.sm4_tables import TableA
+
+    # mode 'a' maps each key byte through the 64-entry TableA via key & 0x3F
+    key = bytes.fromhex("0123456789abcdeffedcba9876543210")
+    expected = bytes(TableA[b & 0x3F] for b in key)
+    transformed = sm4_transform_key(key, "a")
+    assert len(transformed) == 16
+    assert transformed == expected
+    assert transformed[0] == TableA[1]  # key[0] = 0x01 -> TableA[1]
+
+    plaintext = bytes([0x2B, 0, 0, 0]) + b"../../../ABI"
+    ciphertext = sm4_ecb_encrypt(plaintext, transformed, "none")
+    assert sm4_ecb_decrypt(ciphertext, transformed, "none") == plaintext
+
+
+def _encode_abi_index(offset: int, seed: int) -> int:
+    mask = (1 << 64) - 1
+    xor = 0xD72CAC4E59907DA0
+    t = (offset ^ seed) & mask
+    rol = ((t << 23) | (t >> 41)) & mask
+    return (rol ^ xor) & mask
+
+
+def _make_abi_pak(index_bytes: bytes, offset: int = 0x100) -> bytes:
+    raw = bytearray(offset)
+    raw.extend(index_bytes)
+    footer = bytearray(221)
+    footer[16:20] = (0x0B).to_bytes(4, "little")          # version
+    footer[20:24] = (0x53647586).to_bytes(4, "little")    # ABI pak magic
+    footer[24] = 1                                         # encrypted index
+    footer[45:53] = _encode_abi_index(offset, 0xD3A512).to_bytes(8, "little")
+    footer[53:61] = _encode_abi_index(len(index_bytes), 0xB640093C).to_bytes(8, "little")
+    raw.extend(footer)
+    return bytes(raw)
+
+
+def test_validate_key_sm4_abi_synthetic_pak():
+    from dualforge.encryption.brute import probe_pak_blocks, validate_key
+    from dualforge.encryption.schemes.sm4 import sm4_ecb_encrypt, sm4_transform_key
+
+    key_str = "1F5E4191BDE73F9C65A48D8AA0648C46C06C08F9853093C7EBF4AA5CA22F0486"
+    key = sm4_transform_key(bytes.fromhex(key_str), "a")
+    plaintext = bytes([0x2B, 0, 0, 0]) + b"../../../ABInfinite/Content/"
+    index = sm4_ecb_encrypt(plaintext[:16], key, "none")
+    raw = _make_abi_pak(index)
+
+    blocks = probe_pak_blocks(raw)
+    assert blocks, "ABI footer probe must locate the index block"
+    assert validate_key(blocks[0], "sm4-abi", key_str, "pakchunk0-WindowsNoEditor.pak")
+    # a wrong scheme/key must not validate
+    assert not validate_key(blocks[0], "sm4-abi", "00" * 32, "pakchunk0-WindowsNoEditor.pak")
+    assert not validate_key(blocks[0], "aes-256", key_str, "pakchunk0-WindowsNoEditor.pak")
+
+
+def test_guess_scheme_abinf():
+    from dualforge.encryption.presets import guess_scheme
+
+    preset = guess_scheme(mount="../../../ABInfinite/Content/", archive_name="pakchunk0-WindowsNoEditor.pak")
+    assert preset is not None and preset.name == "arena-breakout"
+    assert guess_scheme(game="Arena Breakout Infinite").name == "arena-breakout"

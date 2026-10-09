@@ -1,0 +1,12 @@
+{
+    "profiles": {
+        "dualforge": {
+            "game": "GAME_ArenaBreakoutInfinite",
+            "paksDir": "E:\\SteamLibrary\\steamapps\\common\\ABInfinite\\ABInfinite\\Content\\Paks",
+            "usmap": null,
+            "aesKey": "1F5E4191BDE73F9C65A48D8AA0648C46C06C08F9853093C7EBF4AA5CA22F0486",
+            "outputDir": "C:\\Users\\B6k\\AppData\\Local\\Temp\\opencode\\abi_out",
+            "exportRoots": ["ABInfinite/Content"]
+        }
+    }
+}

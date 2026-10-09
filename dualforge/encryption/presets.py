@@ -67,6 +67,13 @@ PRESETS: list[GameScheme] = [
         stages=["aes-256", "xor8"],
     ),
     GameScheme(
+        name="arena-breakout",
+        label="Arena Breakout: Infinite (SM4 key-table A)",
+        games={"ArenaBreakout", "Arena Breakout", "ABInfinite"},
+        stages=["sm4-abi"],
+        detect=lambda mount, archive: "ABInfinite" in mount or "ABInfinite" in archive,
+    ),
+    GameScheme(
         name="huwei",
         label="War Thunder / HoYoverse split (AES + dynamic)",
         stages=["aes-256"],

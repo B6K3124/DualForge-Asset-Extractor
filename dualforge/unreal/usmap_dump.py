@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import ctypes
 import struct
 from dataclasses import dataclass, field
 from collections.abc import Callable
 
 from dualforge.log import get_logger
+from dualforge.unreal.process import (
+    ProcessError as UsmapDumpError,
+    ProcessReader,
+    check_windows,
+    find_process,
+    list_processes as list_game_processes,
+)
 
 logger = get_logger(__name__)
 
@@ -19,17 +25,6 @@ FNAME_BLOCK_SIZE = 0x10000        # 64 KB per block
 FNAME_CHUNK_TABLE_SIZE = 0x4000   # 16 KB chunk table = 4096 x u32
 FNAME_ANCHOR = b"None\x00ByteProperty\x00IntProperty\x00BoolProperty\x00"
 
-PROCESS_QUERY_INFORMATION = 0x0400
-PROCESS_VM_READ = 0x0010
-MEM_COMMIT = 0x1000
-PAGE_NOACCESS = 0x01
-PAGE_GUARD = 0x100
-PAGE_READABLE = (
-    0x02 | 0x04 | 0x20 | 0x40 | 0x08  # READONLY, READWRITE, EXECUTE_READ, EXECUTE_READWRITE, WRITECOPY
-)
-
-_READ_CHUNK = 4 * 1024 * 1024
-
 _LAYOUT_MSB = "msb"    # wide flag = bit 15, length = bits 0-14 (UE4.25-UE5.0)
 _LAYOUT_LSB = "lsb"    # wide flag = bit 0, length = bits 1-15 (UE5.1)
 _LAYOUT_PACKED = "packed"  # length = bits 6-15, index = bits 0-5 (UE5.2+; aligned 2)
@@ -39,172 +34,12 @@ _LAYOUT_PACKED = "packed"  # length = bits 6-15, index = bits 0-5 (UE5.2+; align
 FNAME_ANCHOR_PACKED = b"\x1e\x01None\x10\x03ByteProperty\xc0\x02IntProperty"
 
 
-class UsmapDumpError(Exception):
-    pass
-
-
 @dataclass
 class FNamePool:
     names: list[str] = field(default_factory=list)
     pool_base: int = 0
     block0_base: int = 0
     block_count: int = 0
-
-
-def list_game_processes() -> list[tuple[int, str]]:
-    """Return [(pid, exe)] for running processes (Windows only)."""
-    _check_windows()
-    from ctypes import wintypes
-
-    class ProcessEntry32(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_ulonglong),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", ctypes.c_wchar * 260),
-        ]
-
-    handle = ctypes.windll.kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
-    if handle == wintypes.HANDLE(-1).value:
-        raise UsmapDumpError("CreateToolhelp32Snapshot failed")
-    try:
-        entry = ProcessEntry32()
-        entry.dwSize = ctypes.sizeof(ProcessEntry32)
-        if not ctypes.windll.kernel32.Process32FirstW(handle, ctypes.byref(entry)):
-            raise UsmapDumpError("Process32FirstW failed")
-        result: list[tuple[int, str]] = []
-        while True:
-            if entry.th32ProcessID > 0:
-                result.append((entry.th32ProcessID, entry.szExeFile))
-            if not ctypes.windll.kernel32.Process32NextW(handle, ctypes.byref(entry)):
-                break
-        return result
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
-
-
-def find_process(name: str) -> tuple[int, str]:
-    """Find a process by executable name (case-insensitive, .exe optional)."""
-    wanted = name.lower()
-    if not wanted.endswith(".exe"):
-        wanted += ".exe"
-    for pid, exe in list_game_processes():
-        if exe.lower() == wanted:
-            return pid, exe
-    raise UsmapDumpError(f"no running process named {wanted!r}")
-
-
-def _check_windows() -> None:
-    import sys
-
-    if sys.platform != "win32":
-        raise UsmapDumpError("usmap dump requires Windows (process memory reading)")
-
-
-class _ProcessReader:
-    def __init__(self, pid: int):
-        from ctypes import wintypes
-
-        class MemoryBasicInformation(ctypes.Structure):
-            _fields_ = [
-                ("BaseAddress", wintypes.LPVOID),
-                ("AllocationBase", wintypes.LPVOID),
-                ("AllocationProtect", wintypes.DWORD),
-                ("PartitionId", wintypes.WORD),
-                ("RegionSize", ctypes.c_size_t),
-                ("State", wintypes.DWORD),
-                ("Protect", wintypes.DWORD),
-                ("Type", wintypes.DWORD),
-            ]
-
-        self._memory_basic_info = MemoryBasicInformation
-        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        self._kernel32.OpenProcess.restype = wintypes.HANDLE
-        self._kernel32.ReadProcessMemory.argtypes = (
-            wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID,
-            ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
-        )
-        self._kernel32.VirtualQueryEx.argtypes = (
-            wintypes.HANDLE, wintypes.LPCVOID,
-            ctypes.POINTER(MemoryBasicInformation), ctypes.c_size_t,
-        )
-        self.handle = self._kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not self.handle:
-            raise UsmapDumpError(
-                f"OpenProcess failed for pid {pid} (run as admin for protected games)"
-            )
-        self.pid = pid
-
-    def close(self) -> None:
-        if self.handle:
-            self._kernel32.CloseHandle(self.handle)
-            self.handle = None
-
-    def read(self, address: int, size: int) -> bytes:
-        buf = ctypes.create_string_buffer(size)
-        read = ctypes.c_size_t(0)
-        if not self._kernel32.ReadProcessMemory(
-            self.handle, ctypes.c_void_p(address), buf, size, ctypes.byref(read)
-        ):
-            raise UsmapDumpError(f"ReadProcessMemory failed at 0x{address:X}")
-        return buf.raw[:read.value]
-
-    def readable_regions(self):
-        info = self._memory_basic_info()
-        address = 0
-        max_address = 1 << (ctypes.sizeof(ctypes.c_void_p) * 8)
-        while address < max_address:
-            if self._kernel32.VirtualQueryEx(
-                self.handle, ctypes.c_void_p(address), ctypes.byref(info), ctypes.sizeof(info)
-            ) == 0:
-                break
-            if (
-                info.State == MEM_COMMIT
-                and (info.Protect & PAGE_READABLE)
-                and info.RegionSize > 0
-            ):
-                yield int(info.BaseAddress or 0), int(info.RegionSize)
-            address = int(info.BaseAddress or 0) + int(info.RegionSize)
-
-    def region(self, address: int) -> tuple[int, int]:
-        """Return (base, size) of the mapped region containing address."""
-        info = self._memory_basic_info()
-        if self._kernel32.VirtualQueryEx(
-            self.handle, ctypes.c_void_p(address), ctypes.byref(info), ctypes.sizeof(info)
-        ) == 0:
-            raise UsmapDumpError(f"VirtualQueryEx failed at 0x{address:X}")
-        return int(info.BaseAddress or 0), int(info.RegionSize)
-
-    def scan(self, pattern: bytes) -> list[int]:
-        """Find all occurrences of pattern in readable memory."""
-        hits: list[int] = []
-        for base, size in self.readable_regions():
-            if size < len(pattern):
-                continue
-            offset = 0
-            while offset < size:
-                try:
-                    chunk = self.read(base + offset, min(_READ_CHUNK, size - offset))
-                except UsmapDumpError:
-                    break
-                if not chunk:
-                    break
-                start = 0
-                while True:
-                    found = chunk.find(pattern, start)
-                    if found < 0:
-                        break
-                    hits.append(base + offset + found)
-                    start = found + 1
-                offset += len(chunk)
-        return hits
 
 
 def _parse_entry(block: bytes, offset: int, layout: str) -> tuple[str, int] | None:
@@ -295,8 +130,8 @@ def _walk_pool_table(
 
 def scan_fname_pool(pid: int, anchor: bytes = FNAME_ANCHOR) -> FNamePool:
     """Find the global FNamePool and walk every name in a running UE5 process."""
-    _check_windows()
-    reader = _ProcessReader(pid)
+    check_windows()
+    reader = ProcessReader(pid)
     try:
         hits = reader.scan(FNAME_ANCHOR_PACKED)
         if hits:
@@ -320,7 +155,7 @@ def scan_fname_pool(pid: int, anchor: bytes = FNAME_ANCHOR) -> FNamePool:
         reader.close()
 
 
-def _scan_packed_pool(reader: _ProcessReader, block0_base: int) -> FNamePool:
+def _scan_packed_pool(reader: ProcessReader, block0_base: int) -> FNamePool:
     """Walk the contiguous name arena of a packed (UE5.2+) FNamePool."""
     region_base, region_size = reader.region(block0_base)
     offset_in_region = block0_base - region_base
@@ -398,7 +233,9 @@ def _build_test_pool():
 
 __all__ = [
     "FNAME_ANCHOR",
+    "FNAME_ANCHOR_PACKED",
     "FNamePool",
+    "ProcessReader",
     "UsmapDumpError",
     "dump_usmap",
     "find_process",

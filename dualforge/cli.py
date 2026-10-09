@@ -14,6 +14,7 @@ import sys
 from dualforge import __version__
 from dualforge.cli_commands import (
     _cmd_codecs,
+    _cmd_crack_offline,
     _cmd_crack_run,
     _cmd_crack_status,
     _cmd_detect,
@@ -348,6 +349,45 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="report the Ghidra/JRE toolchain status",
     )
     crack_status.set_defaults(crack_handler=_cmd_crack_status)
+    crack_offline = crack_sub.add_parser(
+        "offline",
+        help="hunt the key from a running game's memory (no Ghidra needed)",
+        description="Attaches to a running game process, scans its memory for "
+        "key-sized crypto material and validates candidates against a pak. "
+        "For games whose key is runtime/session-bound and never reaches disk.",
+    )
+    crack_offline.add_argument(
+        "--process", help="running game executable name (e.g. Game.exe)",
+    )
+    crack_offline.add_argument("--pid", type=int, help="process id to attach to")
+    crack_offline.add_argument(
+        "--list-processes", action="store_true",
+        help="list running processes and exit (handy to pick --pid)",
+    )
+    crack_offline.add_argument(
+        "--pak", help="a game .pak or install folder to validate keys against "
+        "(omit to just report the best candidates)",
+    )
+    crack_offline.add_argument(
+        "--scheme", help="only validate with this scheme (e.g. aes-256, sm4-abi)",
+    )
+    crack_offline.add_argument("--title", help="title to store the cracked key under")
+    crack_offline.add_argument(
+        "--no-save", action="store_true", help="validate candidates but do not save keys",
+    )
+    crack_offline.add_argument(
+        "--block-count", type=int, default=16,
+        help="pak index blocks to probe during validation (default: 16)",
+    )
+    crack_offline.add_argument(
+        "--max-candidates", type=int, default=512,
+        help="max deduplicated candidate keys to test (default: 512)",
+    )
+    crack_offline.add_argument(
+        "--raw-windows", type=int, default=250_000,
+        help="max sampled entropy windows for the whole-address-space pass (default: 250000)",
+    )
+    crack_offline.set_defaults(crack_handler=_cmd_crack_offline)
 
     locres_parser = sub.add_parser(
         "locres", help="inspect and dump Unreal Engine .locres localization files",
