@@ -41,7 +41,7 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: python scripts/ci_test.py -q
 
       - name: Package sanity (CLI import must not download Oodle)
         run: python -m dualforge.cli --version

@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QApplication, QTreeWidget, QTreeWidgetItem
 
 from dualforge.ui.tree_builder import (
     USER_ROLE,
@@ -18,6 +18,12 @@ from dualforge.ui.tree_builder import (
     set_all_checkstates,
     split_parts,
 )
+
+# A QTreeWidget is a QWidget and must belong to an application instance;
+# constructing one without an app crashes at interpreter shutdown on
+# Windows (fail-fast abort), and test ordering varies. Same convention as
+# test_preview_video.py / test_preview_helpers.py.
+app = QApplication.instance() or QApplication([])
 
 
 def test_normalize_path():
