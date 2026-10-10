@@ -137,6 +137,19 @@ def test_match_engine_hint():
     assert score_unity > score_unreal
 
 
+def test_match_engine_hint_with_mount():
+    """The engine baseline must still count when a mount point is supplied:
+    the archive's own extension decides it, not the end of path+mount text."""
+    driver = GameDriver(
+        name="unity-game",
+        label="Unity Game",
+        engine="unity",
+        game_fragments=["MyUnityGame"],
+    )
+    score = driver.matches("/games/MyUnityGame/data.unity3d", mount="MyMount")
+    assert score >= 110.0  # fragment (100) + engine hint (10)
+
+
 # ── file I/O ─────────────────────────────────────────────────────────
 
 
@@ -484,11 +497,56 @@ def test_registry_match_prefers_generic_on_ambiguous_tie():
     assert fortnite is not None
     assert fortnite.name == "fortnite"
 
-    # A driver that matches only via its archive pattern still wins.
-    tekken = reg.match("/games/Anything/pakchunk0-Windows.pak")
-    assert tekken is not None
-    assert tekken.name in (d.name for d in reg._drivers.values() if d.archive_patterns)
-    assert tekken.name != "generic-unreal"
+    # A generic pak filename alone ("pakchunk0-Windows.pak") is shared by every
+    # UE title, so it must NOT pin an unknown folder to whichever driver
+    # iterated first - it resolves to the engine's generic driver. Regression:
+    # anonymous UE paks used to be mislabeled as "fortnite".
+    anonymous = reg.match("/games/Anything/pakchunk0-Windows.pak")
+    assert anonymous is not None
+    assert anonymous.name == "generic-unreal"
+
+
+def test_registry_match_unknown_games_stay_generic():
+    """Unknown titles must never inherit a known game's driver just because
+    they share the default engine archive-naming pattern. Regression: a
+    stranger's UE5 pak was labeled 'fortnite' and an unknown Unity title's
+    assets were labeled 'valheim'."""
+    from dualforge.drivers.registry import DriverRegistry
+
+    reg = DriverRegistry()
+    reg._ensure_loaded()
+    unknown_unreal = reg.match(
+        "D:/SteamLibrary/steamapps/common/Hogwarts Legacy/Phoenix/Content/Paks/pakchunk0-Windows.pak"
+    )
+    assert unknown_unreal is not None
+    assert unknown_unreal.name == "generic-unreal"
+    unknown_unity = reg.match(
+        "D:/SteamLibrary/steamapps/common/Hollow Knight/hollow_knight_Data/sharedassets0.assets"
+    )
+    assert unknown_unity is not None
+    assert unknown_unity.name == "generic-unity"
+    # A known title in the folder still beats the generic driver.
+    valheim = reg.match(
+        "D:/SteamLibrary/steamapps/common/valheim/valheim_Data/sharedassets0.assets"
+    )
+    assert valheim is not None
+    assert valheim.name == "valheim"
+
+
+def test_registry_match_distinctive_pattern_still_wins():
+    """A game that names itself in the archive filename (no folder hint) must
+    still be identified: the shared-pattern generic rule only applies to the
+    default engine naming conventions, not to a title-specific pattern."""
+    from dualforge.drivers.registry import DriverRegistry
+
+    reg = DriverRegistry()
+    reg._ensure_loaded()
+    oblvr = reg.match("D:/UnknownModFolder/Content/Paks/OblivionRemastered-Windows.pak")
+    assert oblvr is not None
+    assert oblvr.name == "oblivion-remastered"
+    skyrim = reg.match("D:/mods/Skyrim - Meshes.bsa")
+    assert skyrim is not None
+    assert skyrim.name == "skyrim"
 
 
 def test_registry_match_tie_prefers_specific_subtitle():

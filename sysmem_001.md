@@ -24,7 +24,7 @@ Make DualForge's key-cracking pipeline reusable across games (online + offline),
 - CLI: `crack offline` subcommand in `cli.py` (`--process`, `--pid`, `--list-processes`, `--pak`, `--scheme`, `--title`, `--no-save`, `--block-count`, `--max-candidates`, `--raw-windows`); `_cmd_crack_offline` handler in `cli_commands/crack.py`; exported from `cli_commands/__init__.py`. `--help` verified.
 - Tests: `tests/test_crack_process.py` with `FakeReader` (10 tests; orchestration via monkeypatched `ProcessReader`/`resolve_process`/`validate_keys_against_pak`/`KeyStore`/`find_validation_pak`). `test_collect_candidates_finds_both_hex_text_and_raw` fixed (see Important Details).
 - Full suite: **651 passed**; `ruff check` clean on all changed files.
-- Carried-over completed work: SM4 engine + tables (`sm4.py`, `sm4_tables.py`), scheme-aware `validate_key`/`probe_pak_blocks`/ABI blocks, `arena-breakout` preset, `uex_adapter.py` GAME/FOLDER mapping, UEX/CUE4Parse SM4 ABI patches, `SM4_SBOX` + `sm4_sbox` preset in the ghidra finder, `tests/test_encryption.py` SM4/ABI tests. `scripts/abi/` holds the ABI RE research scripts.
+- Carried-over completed work: SM4 engine + tables (`sm4.py`, `sm4_tables.py`), scheme-aware `validate_key`/`probe_pak_blocks`/ABI blocks, `arena-breakout` preset, `uex_adapter.py` GAME/FOLDER mapping, UEX/CUE4Parse SM4 ABI patches, `SM4_SBOX` + `sm4_sbox` preset in the ghidra finder, `tests/test_encryption.py` SM4/ABI tests. `scripts/research/` holds the RE research scripts.
 
 ### Active
 - None.
@@ -46,6 +46,6 @@ Make DualForge's key-cracking pipeline reusable across games (online + offline),
 - `dualforge/encryption/schemes/sm4.py`, `sm4_tables.py`, `dualforge/encryption/presets.py`, `dualforge/unreal/uex_adapter.py`: ABI/SM4 scheme support (complete).
 - `scripts/ghidra/ghidra_key_finder.py`: AES/SM4 table constants loaded at runtime; `tests/ghidra` loads it the same `sys.modules` way.
 - `external/uex/external/CUE4Parse/CUE4Parse/GameTypes/ABI/Encryption/SM4/ABIDecryption.cs`, `UE4/Pak/Objects/FPakInfo.cs`, `external/uex/src/Uex/Program.cs`: UEX/CUE4Parse ABI SM4 support.
-- `scripts/abi/`: ABI RE research scripts.
+- `scripts/research/`: RE research scripts.
 - `tests/test_crack_process.py`, `tests/test_usmap_dump.py`, `tests/test_crack.py`, `tests/test_encryption.py`: regression coverage.
 - `sysmem_001.md`: this summary.

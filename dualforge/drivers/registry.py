@@ -18,6 +18,21 @@ logger = get_logger(__name__)
 
 DEFAULT_DRIVERS_DIR = Path.home() / ".dualforge" / "drivers"
 
+# Archive-name patterns that every title in an engine family shares, so a
+# pattern-only match on them cannot identify a game. Used to keep unknown
+# games from being mislabeled as the first built-in driver that iterates first.
+GENERIC_ARCHIVE_PATTERNS = frozenset(
+    {
+        "pakchunk*-Windows.pak",
+        "*.assets",
+        "*.bundle",
+        "*.assetbundle",
+        "*.unity3d",
+        "*.bsa",
+        "*.ba2",
+    }
+)
+
 
 def default_drivers_dir() -> Path:
     return DEFAULT_DRIVERS_DIR
@@ -97,12 +112,18 @@ class DriverRegistry:
         Optionally filters by engine type. Returns the highest-scoring
         driver or None if nothing scores above zero.
         """
+        from fnmatch import fnmatch
+        from pathlib import Path
+
         self._ensure_loaded()
         best: GameDriver | None = None
         best_score = 0.0
         best_is_generic = False
         best_hits = (0, 0)
+        best_generic: GameDriver | None = None
+        best_generic_score = 0.0
         text = archive_path.lower()
+        basename = Path(archive_path).name
         for driver in self._drivers.values():
             if engine and driver.engine not in (engine, "auto"):
                 continue
@@ -120,6 +141,9 @@ class DriverRegistry:
                 and not driver.archive_patterns
                 and driver.engine not in ("auto", "")
             )
+            if is_generic and score > best_generic_score:
+                best_generic_score = score
+                best_generic = driver
             # For specific drivers that tie (e.g. "new vegas" vs "fallout" on a
             # Fallout: New Vegas archive), prefer the one whose fragments hit
             # the path more and with the longest distinguishing match, so a
@@ -141,7 +165,29 @@ class DriverRegistry:
                 best = driver
                 best_is_generic = is_generic
                 best_hits = hits
-        return best if best_score > 0 else None
+        if best is None or best_score <= 0:
+            return None
+        # A specific driver that won purely on a *generic* archive filename
+        # pattern ("pakchunk*-Windows.pak", "*.assets", "*.bsa"...) names no
+        # actual game: those patterns are the default in every UE/Unity title.
+        # Unless a distinctive fragment matched, an unknown title must resolve
+        # to its engine's generic driver rather than the first title whose
+        # shared pattern happened to iterate first (e.g. a stranger's pak must
+        # never be labeled "fortnite"/"valheim").
+        if not best_is_generic and not any(
+            frag.lower() in text for frag in best.game_fragments
+        ):
+            matched_patterns = [
+                pattern for pattern in best.archive_patterns if fnmatch(basename, pattern)
+            ]
+            if (
+                matched_patterns
+                and all(pattern in GENERIC_ARCHIVE_PATTERNS for pattern in matched_patterns)
+                and best_generic is not None
+                and best_generic_score > 0
+            ):
+                return best_generic
+        return best
 
     # ── file I/O ──────────────────────────────────────────────────────
 

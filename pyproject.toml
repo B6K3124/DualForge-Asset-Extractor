@@ -61,7 +61,7 @@ select = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]
 # it would mean reformatting upstream code and defeating that. Our own patches
 # in these files are still covered by the test suite.
 "dualforge/vendor/pyuepak/*" = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]
-# ABI reverse-engineering scratch scripts (dense one-liner style) are research
+# Reverse-engineering scratch scripts (dense one-liner style) are research
 # artifacts, not shipped code. The shipped behaviour they fed into lives in
 # dualforge/encryption/ and is covered by the encryption test suite.
-"scripts/abi/*" = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]
+"scripts/research/*" = ["E4", "E7", "E9", "F", "B", "SIM", "UP"]

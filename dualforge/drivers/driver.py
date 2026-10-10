@@ -117,13 +117,16 @@ class GameDriver:
                 if fnmatch(basename, pattern):
                     score += 50.0
                     break
-        if self.engine != "auto" and (self.engine == "unreal" and any(
-            text.endswith(ext) for ext in (".pak", ".utoc", ".ucas")
-        ) or self.engine == "unity" and any(
-            text.endswith(ext) for ext in (".unity3d", ".bundle", ".assetbundle", ".assets")
-        ) or self.engine == "bethesda" and any(
-            text.endswith(ext) for ext in (".bsa", ".ba2")
-        ) or self.engine == "cdpr" and text.endswith(".archive")):
+        # The engine hint must be judged on the archive filename only: the
+        # combined path+mount text can end in the mount point rather than the
+        # archive extension, silently dropping the baseline for every driver.
+        name = Path(archive_path).name.lower()
+        if self.engine != "auto" and (
+            self.engine == "unreal" and name.endswith((".pak", ".utoc", ".ucas"))
+            or self.engine == "unity" and name.endswith((".unity3d", ".bundle", ".assetbundle", ".assets"))
+            or self.engine == "bethesda" and name.endswith((".bsa", ".ba2"))
+            or self.engine == "cdpr" and name.endswith(".archive")
+        ):
             score += 10.0
         return score
 
