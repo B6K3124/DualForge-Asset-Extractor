@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -36,6 +38,32 @@ class DriversDialog(QDialog):
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
+
+        match_row = QHBoxLayout()
+        match_row.addWidget(QLabel("Match game:"))
+        self.match_edit = QLineEdit()
+        self.match_edit.setPlaceholderText(
+            "Game folder, archive or title text, e.g. C:\\Games\\ArenaBreakoutInfinite"
+        )
+        self.match_edit.returnPressed.connect(self._match_driver)
+        match_row.addWidget(self.match_edit, 1)
+        match_browse_btn = QPushButton("Browse...")
+        match_browse_btn.clicked.connect(self._browse_match_target)
+        match_row.addWidget(match_browse_btn)
+        self.engine_combo = QComboBox()
+        self.engine_combo.setToolTip("Restrict the match to one engine")
+        match_row.addWidget(self.engine_combo)
+        match_btn = QPushButton("Match Driver")
+        match_btn.setProperty("role", "primary")
+        match_btn.clicked.connect(self._match_driver)
+        match_row.addWidget(match_btn)
+        layout.addLayout(match_row)
+        self._rebuild_engine_combo()
+
+        self.match_result = QLabel("")
+        self.match_result.setWordWrap(True)
+        self.match_result.setStyleSheet("color: #8b90a3;")
+        layout.addWidget(self.match_result)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(splitter, 1)
@@ -98,6 +126,53 @@ class DriversDialog(QDialog):
             item = QListWidgetItem(row)
             item.setData(Qt.ItemDataRole.UserRole, driver.name)
             self.list_widget.addItem(item)
+        self._rebuild_engine_combo()
+
+    def _rebuild_engine_combo(self) -> None:
+        keep = self.engine_combo.currentData()
+        self.engine_combo.clear()
+        self.engine_combo.addItem("(any engine)", None)
+        for engine in sorted({d.engine for d in registry.list() if d.engine}):
+            self.engine_combo.addItem(engine.title(), engine)
+        index = self.engine_combo.findData(keep)
+        if index >= 0:
+            self.engine_combo.setCurrentIndex(index)
+
+    def _browse_match_target(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose an archive to match a driver for",
+            "",
+            "Game archives (*.pak *.utoc *.ucas *.unity3d *.bundle *.assets *.assetbundle *.bsa *.ba2);;All files (*)",
+        )
+        if chosen:
+            self.match_edit.setText(chosen)
+            self._match_driver()
+
+    def _match_driver(self) -> None:
+        target = self.match_edit.text().strip()
+        if not target:
+            QMessageBox.information(
+                self, "Match Driver", "Enter a game folder, archive path or title text first."
+            )
+            return
+        try:
+            driver = registry.match(target, engine=self.engine_combo.currentData())
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QMessageBox.warning(self, "Match Driver", str(exc))
+            return
+        if driver is None:
+            self.match_result.setText(
+                f"No driver matched <code>{target}</code>."
+                " Create one from an archive, or broaden the engine filter."
+            )
+            return
+        self._select_named(driver.name)
+        self.match_result.setText(
+            f"<code>{target}</code> &rarr; <b>{driver.label}</b> ({driver.name})"
+            f" &middot; {driver.engine} &middot; {driver.encryption_scheme}"
+        )
+        self._show_detail()
 
     def _select_first(self) -> None:
         if self.list_widget.count():

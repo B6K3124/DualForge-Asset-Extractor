@@ -308,6 +308,14 @@ class MainWindow(QMainWindow):
         )
         ghidra_action.triggered.connect(self.open_ghidra_hunt)
         tools_menu.addAction(ghidra_action)
+        offline_action = QAction("Offline Key Hunt (from RAM)...", self)
+        offline_action.setToolTip(
+            "Scan a running game's memory for its decryption key - no Ghidra. "
+            "Supports AES-256, SM4/SM4-ABI (Arena Breakout: Infinite), Unity CN "
+            "and derived scheme presets."
+        )
+        offline_action.triggered.connect(self.open_offline_hunt)
+        tools_menu.addAction(offline_action)
         usmap_action = QAction("Generate USMAP from Running Game...", self)
         usmap_action.setToolTip(
             "Dump the FNamePool of a running UE5 game into a local .usmap file"
@@ -1604,6 +1612,11 @@ class MainWindow(QMainWindow):
         if binary and not Path(binary).is_file():
             binary = ""
         GhidraDialog(self, default_binary=binary).exec()
+
+    def open_offline_hunt(self) -> None:
+        from dualforge.ui.offline_crack_dialog import OfflineKeyHuntDialog
+
+        OfflineKeyHuntDialog(self).exec()
 
     def open_usmap_dump(self) -> None:
         from dualforge.ui.usmap_dialog import UsmapDumpDialog
