@@ -19,7 +19,6 @@ from .oodle import oodle
 from dataclasses import dataclass
 
 import logging
-import zlib, gzip
 import io
 
 logger = logging.getLogger("pyuepak.entry")
@@ -31,6 +30,28 @@ oodle_comp = oodle()
 
 def align(offset: int) -> int:
     return (offset + 15) & ~15
+
+
+#: EIoEncryptionMethod.AES_CTR - older paks are AES-ECB (1) by definition.
+_ENCRYPTION_METHOD_AES_CTR = 2
+
+
+def decrypt_ctr(key: bytes, data: bytes, iv: bytes, block_index: int = 0) -> bytes:
+    """Unreal's AES-CTR ("encryption unit") stream cipher.
+
+    The counter block is a 12-byte IV prefix plus a 32-bit big-endian block
+    index (see CUE4Parse's ``Aes.CryptCtr``). ``cryptography``'s CTR increments
+    the 16-byte counter as one big-endian integer, which matches for any index
+    that fits in the low four bytes.
+    """
+    if key is None or key == bytes(32):
+        raise ValueError("Encryption key is required")
+    if len(iv) != 12:
+        raise ValueError("Unreal AES-CTR initialization vectors must be 12 bytes")
+    nonce = bytes(iv) + (block_index & 0xFFFFFFFF).to_bytes(4, "big")
+    cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
+    decryptor = cipher.decryptor()
+    return decryptor.update(data) + decryptor.finalize()
 
 
 @dataclass(slots=True, frozen=True)
@@ -63,6 +84,8 @@ class Entry:
         "flags",
         "timestamp",
         "compressed_size",
+        "encryption_iv",
+        "encryption_method",
     )
 
     def __init__(self):
@@ -79,6 +102,8 @@ class Entry:
         self.timestamp = 0
         self.hash = None
         self.compressed_size = 0
+        self.encryption_iv: bytes | None = None
+        self.encryption_method = 0
 
     def __repr__(self):
         return f"Entry(offset={self.offset}, size={self.size})"
@@ -147,6 +172,7 @@ class Entry:
         version: PakVersion,
         compressions: list[COMPRESSION],
         compression_names: list[str] | None = None,
+        encryption_method: int = 0,
     ):
         """Read the entry from the encoded reader."""
 
@@ -190,6 +216,13 @@ class Entry:
 
         self.offset = read_varint(31)
         self.size = read_varint(30)
+
+        # UE 6.0 AES-CTR entries carry a per-file 12-byte IV in the index,
+        # between the offset/size pair and the compressed size. Read it before
+        # the compressed size so the rest of the entry stays aligned.
+        if self.is_encrypted and encryption_method == _ENCRYPTION_METHOD_AES_CTR:
+            self.encryption_iv = reader.read(12)
+            self.encryption_method = encryption_method
 
         if self.compression == COMPRESSION.NONE:
             self.compressed_size = self.size
@@ -243,20 +276,32 @@ class Entry:
             data = reader.read(self.compressed_size)
 
         if self.is_encrypted:
-            cipher = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
-            decryptor = cipher.decryptor()
+            if (
+                self.encryption_method == _ENCRYPTION_METHOD_AES_CTR
+                and self.encryption_iv
+            ):
+                # The whole entry is one encryption unit, so a single CTR pass
+                # from block 0 yields the same keystream each block would get.
+                data = decrypt_ctr(key, data, self.encryption_iv)
+                data = data[: self.compressed_size]
+            else:
+                cipher = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
+                decryptor = cipher.decryptor()
 
-            decrypted_data = bytearray()
-            for i in range(0, len(data), 16):
-                block = data[i : i + 16]
-                if len(block) == 16:  # Only decrypt full blocks
-                    decrypted_block = decryptor.update(block)
-                    decrypted_data.extend(decrypted_block)
-                else:
-                    decrypted_data.extend(block)
+                decrypted_data = bytearray()
+                for i in range(0, len(data), 16):
+                    block = data[i : i + 16]
+                    if len(block) == 16:  # Only decrypt full blocks
+                        decrypted_block = decryptor.update(block)
+                        decrypted_data.extend(decrypted_block)
+                    else:
+                        decrypted_data.extend(block)
 
-            # Truncate to original compressed size
-            data = decrypted_data[: self.compressed_size]
+                data = bytes(decrypted_data[: self.compressed_size])
+
+        # Force bytes: a bytearray slice reaches the Oodle ctypes loader (and
+        # c_char_p rejects it).
+        data = bytes(data)
 
         ranges = []
         if self.blocks:
@@ -281,15 +326,6 @@ class Entry:
 
         if self.compression == COMPRESSION.NONE:
             return data
-
-        elif self.compression == COMPRESSION.ZLIB:
-            for r in ranges:
-                decompressed_data.write(zlib.decompress(data[r.start : r.stop]))
-            return decompressed_data.getvalue()
-        elif self.compression == COMPRESSION.GZIP:
-            for r in ranges:
-                decompressed_data.write(gzip.decompress(data[r.start : r.stop]))
-            return decompressed_data.getvalue()
 
         elif self.compression == COMPRESSION.OODLE:
             total_uncompressed = self.size
@@ -338,9 +374,13 @@ class Entry:
         Only the single-block, natively-decodable methods are supported; that
         is what a pak entry written by this reader needs in order to be read
         back by it. Oodle/custom compression is never produced here.
+
+        Whether to compress depends on ``self.compression`` alone. The 6-bit
+        ``compressio_name`` is a footer-table index that ``PakFile.write``
+        assigns *after* entries are written, so it must not gate this.
         """
         method = NATIVE_METHODS.get(self.compression)
-        if method is None or self.compressio_name is None:
+        if method is None:
             return self.data
         from dualforge.compression import CompressionError, compress
 
@@ -386,10 +426,13 @@ class Entry:
 
         if version >= PakVersion.V3:
             if self.compression != COMPRESSION.NONE:
-                # Block table: one (start, size) pair, entry-relative.
+                # Block table: a uint32 count followed by (start, size) pairs.
+                # The count is part of get_serialized_size's 4 + 16*n budget and
+                # is read back by reader.list(Block.read).
                 start = Entry.get_serialized_size(
                     version, self.compression, self.compression_block_count
                 )
+                writer.uint32(self.compression_block_count)
                 writer.uint64(start)
                 writer.uint64(self.compressed_size)
             writer.uint8(0)  # is_encrypted
@@ -422,6 +465,7 @@ class Entry:
                 start = Entry.get_serialized_size(
                     version, self.compression, self.compression_block_count
                 )
+                writer.uint32(self.compression_block_count)
                 writer.uint64(start)
                 writer.uint64(self.compressed_size)
             writer.uint8(0)  # is_encrypted
@@ -462,3 +506,12 @@ class Entry:
             writer.uint32(self.size)
         else:
             writer.uint64(self.size)
+
+        # read_encoded only reads compressed_size for compressed entries (for
+        # NONE it derives it from size), so it must be written in exactly that
+        # case or the encoded stream is 4-8 bytes short.
+        if self.compression != COMPRESSION.NONE:
+            if is_size_32_bit_safe:
+                writer.uint32(self.compressed_size)
+            else:
+                writer.uint64(self.compressed_size)

@@ -81,7 +81,11 @@ COMPRESSION_BY_NAME: dict[str, COMPRESSION] = {
 UNSUPPORTED_MARKER = COMPRESSION.UNSUPPORTED
 
 #: Methods DualForge can actually decode, delegated to dualforge.compression.
+#: Zlib/Gzip are the common older pak methods; both read and write go through
+#: the shared layer so they inherit its expansion limits.
 NATIVE_METHODS: dict[COMPRESSION, str] = {
+    COMPRESSION.ZLIB: "zlib",
+    COMPRESSION.GZIP: "gzip",
     COMPRESSION.ZSTD: "zstd",
     COMPRESSION.LZ4: "lz4",
     COMPRESSION.BROTLI: "brotli",

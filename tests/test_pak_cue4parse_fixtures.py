@@ -170,6 +170,34 @@ def test_ue50_encrypted_pak_opens_with_fixture_key() -> None:
     assert len(pak.read_file(name)) > 0
 
 
+@pytest.mark.parametrize("engine", ["UE5_8", "UE6_0"])
+@pytest.mark.parametrize("group", ["Unversioned", "Tagged"])
+def test_encrypted_matches_uncompressed_twin(engine: str, group: str) -> None:
+    """Encrypted entries must decode to the same bytes as the plain fixture.
+
+    This is the real check on encryption handling: UE 5.8 uses AES-ECB, UE 6.0
+    (raw footer version 15) switches the index and entries to AES-CTR with a
+    per-file IV, and both must round-trip to the uncompressed twin. The Oodle
+    decode path is required, so it is skipped where no ``oo2core`` DLL exists.
+    """
+    base = FIXTURES / engine / "LegacyPak" / group
+    enc_pak = next(iter(sorted(base.glob("OodleEncrypted/*.pak"))), None)
+    plain_pak = next(iter(sorted(base.glob("Uncompressed/*.pak"))), None)
+    if enc_pak is None or plain_pak is None:
+        pytest.skip(f"no encrypted/uncompressed pair for {engine}/{group}")
+    if not _oodle_available():
+        pytest.skip("no oo2core_*.dll available; Oodle decode untestable")
+
+    enc = PakArchive(str(enc_pak), aes_key=FIXTURE_AES_KEY.hex())
+    plain = PakArchive(str(plain_pak))
+    files = enc.list_files()
+    assert files == plain.list_files(), f"{engine}/{group}: file lists differ"
+    for name in files:
+        assert enc.read_file(name) == plain.read_file(name), (
+            f"{engine}/{group}: {name} differs"
+        )
+
+
 def test_not_a_pak_is_rejected() -> None:
     """A non-pak file must fail with a clear error, not a struct crash."""
     not_a_pak = FIXTURES / "UE5_8" / "IoStore" / "Tagged" / "global.ucas"

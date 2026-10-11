@@ -352,6 +352,61 @@ def test_load_sibling_streams_no_crash_when_missing(tmp_path: Path):
     assert archive.load_sibling_streams() == 0
 
 
+def test_load_sibling_streams_ignores_unrelated_resS(tmp_path: Path):
+    """A bundle sitting next to unrelated stream files must not load them all.
+
+    Regression: the scanner used to glob ``*.resS`` (and friends), so opening
+    one bundle in a game folder pulled every stream file in the directory into
+    the environment.
+    """
+    from dualforge.unity.archive import UnityArchive
+
+    (tmp_path / "unrelated_a.resS").write_bytes(b"a")
+    (tmp_path / "unrelated_b.resS").write_bytes(b"b")
+    (tmp_path / "main.assets").write_bytes(b"fake")
+
+    loaded = []
+
+    class FakeEnv:
+        files = {"main.assets": SimpleNamespace(externals=[])}
+
+        def load_file(self, path, is_dependency=False):
+            loaded.append(path)
+
+    archive = UnityArchive.__new__(UnityArchive)
+    archive.path = str(tmp_path / "main.assets")
+    archive.env = FakeEnv()
+
+    archive.load_sibling_streams()
+    assert not any("unrelated" in path for path in loaded)
+
+
+def test_load_sibling_streams_caps_directory_scan(tmp_path: Path, monkeypatch):
+    """A pathological directory must not load more than the cap of glob hits."""
+    from dualforge.unity import archive as archive_mod
+    from dualforge.unity.archive import UnityArchive
+
+    monkeypatch.setattr(archive_mod, "_MAX_GLOB_SIBLINGS", 4)
+    for i in range(20):
+        (tmp_path / f"CAB-{i:04d}.resS").write_bytes(b"x")
+    (tmp_path / "main.assets").write_bytes(b"fake")
+
+    loaded = []
+
+    class FakeEnv:
+        files = {"main.assets": SimpleNamespace(externals=[])}
+
+        def load_file(self, path, is_dependency=False):
+            loaded.append(path)
+
+    archive = UnityArchive.__new__(UnityArchive)
+    archive.path = str(tmp_path / "main.assets")
+    archive.env = FakeEnv()
+
+    archive.load_sibling_streams()
+    assert len(loaded) <= 4
+
+
 # ---------------------------------------------------------------- settings
 
 

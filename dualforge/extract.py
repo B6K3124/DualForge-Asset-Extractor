@@ -15,6 +15,12 @@ logger = get_logger(__name__)
 Progress = Callable[[int, int, str], None]
 Cancel = Callable[[], bool]
 
+#: A container that unpacks to another container is unwrapped iteratively.
+#: Cap the nesting depth so a crafted "zip of zips" cannot keep the loop busy
+#: indefinitely; every individual decompression is already size-bounded, but the
+#: number of layers is not.
+_MAX_CONTAINER_DEPTH = 16
+
 
 class ExtractCancelled(Exception):
     pass
@@ -313,7 +319,15 @@ def _extract_container(path: str, detection: Detection, options: ExtractOptions,
     raw = Path(path).read_bytes()
     current = detection
     data = raw
+    depth = 0
     while True:
+        depth += 1
+        if depth > _MAX_CONTAINER_DEPTH:
+            result.errors.append(
+                f"container nesting exceeds {_MAX_CONTAINER_DEPTH} levels - "
+                f"refusing to unwrap further (possible decompression bomb)"
+            )
+            return
         _report(options, 0, 1, f"decompressing {current.kind}")
         try:
             data = decompress(data, current.kind)

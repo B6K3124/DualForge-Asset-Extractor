@@ -95,3 +95,73 @@ def test_zip_container():
 def test_unknown_method_raises():
     with pytest.raises(CompressionError):
         decompress(PAYLOAD, "not-a-method")
+
+
+# --------------------------------------------------------- decompression limits
+
+
+def test_output_size_above_cap_is_rejected():
+    from dualforge.compression import MAX_DECOMPRESSED_SIZE
+
+    with pytest.raises(CompressionError, match="exceeds"):
+        decompress(PAYLOAD, "zlib", output_size=MAX_DECOMPRESSED_SIZE + 1)
+
+
+def test_negative_output_size_is_rejected():
+    with pytest.raises(CompressionError, match="negative"):
+        decompress(PAYLOAD, "zlib", output_size=-1)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["zlib", "gzip", "bz2", "lzma"],
+)
+def test_bomb_is_stopped_for_stream_codecs(method, monkeypatch):
+    """A tiny payload that expands past the cap must be refused, not allocated.
+
+    The cap is patched down so the test does not need a real multi-gigabyte
+    payload; the code path and arithmetic are identical.
+    """
+    import dualforge.compression as comp
+
+    monkeypatch.setattr(comp, "MAX_DECOMPRESSED_SIZE", 1024)
+    expanding = PAYLOAD * 200  # decompresses well past 1024 bytes
+    data = {
+        "zlib": zlib.compress,
+        "gzip": gzip.compress,
+        "bz2": __import__("bz2").compress,
+        "lzma": lzma.compress,
+    }[method](expanding)
+
+    with pytest.raises(CompressionError, match="limit"):
+        comp.decompress(data, method)
+
+
+def test_bomb_is_stopped_for_zip(monkeypatch):
+    import io
+    import zipfile
+
+    import dualforge.compression as comp
+
+    monkeypatch.setattr(comp, "MAX_DECOMPRESSED_SIZE", 1024)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bomb.txt", PAYLOAD * 200)
+
+    with pytest.raises(CompressionError, match="limit"):
+        comp.decompress(buffer.getvalue(), "zip", archive_member="bomb.txt")
+
+
+def test_size_below_cap_still_roundtrips(monkeypatch):
+    import dualforge.compression as comp
+
+    monkeypatch.setattr(comp, "MAX_DECOMPRESSED_SIZE", len(PAYLOAD) + 1)
+    assert comp.decompress(zlib.compress(PAYLOAD), "zlib") == PAYLOAD
+
+
+def test_exact_cap_boundary_is_allowed(monkeypatch):
+    """The limit is inclusive: exactly cap bytes must not be treated as a bomb."""
+    import dualforge.compression as comp
+
+    monkeypatch.setattr(comp, "MAX_DECOMPRESSED_SIZE", len(PAYLOAD))
+    assert comp.decompress(gzip.compress(PAYLOAD), "gzip") == PAYLOAD

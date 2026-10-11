@@ -58,10 +58,12 @@ _GAME_SUBDIRS = (
 #: How far up from an archive to walk when looking for a game folder.
 _MAX_PARENT_WALK = 3
 
-#: Ceiling on a single Oodle output buffer. ``output_size`` comes from the
-#: archive, so an unvalidated value would let a 12-byte crafted entry ask for a
-#: 4 GiB allocation. Real cooked assets are far below this.
-_MAX_OUTPUT_SIZE = 2 * 1024 * 1024 * 1024
+#: Ceiling on a single decompression result. ``output_size`` inside an archive
+#: is attacker-controlled, so every uncompressed read is bounded by this to
+#: stop a small crafted payload (a "zip bomb") from exhausting memory.
+MAX_DECOMPRESSED_SIZE = 2 * 1024 * 1024 * 1024
+#: Backwards-compatible name used only by the pak reader and tests.
+_MAX_OUTPUT_SIZE = MAX_DECOMPRESSED_SIZE
 
 
 class _SearchRoot(threading.local):
@@ -266,6 +268,10 @@ class Oodle:
                 f"archive is corrupt or hostile."
             )
         assert self._lib is not None  # guaranteed by _load or OodleUnavailableError
+        # c_char_p insists on a real bytes object; callers handing us a
+        # bytearray/memoryview (e.g. an AES-decrypted buffer) must still work.
+        if not isinstance(data, bytes):
+            data = bytes(data)
         raw_out = ctypes.create_string_buffer(output_size)
         comp_buf = ctypes.c_char_p(data)
         last_error: Exception | None = None

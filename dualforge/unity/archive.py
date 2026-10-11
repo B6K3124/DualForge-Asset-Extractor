@@ -9,6 +9,12 @@ from dualforge.log import get_logger
 
 logger = get_logger(__name__)
 
+#: Sibling stream files are loaded eagerly so that lazily-resolved external
+#: streams work. Globbing a game directory (e.g. StreamingAssets) can match an
+#: unbounded number of unrelated files, so cap what a directory scan pulls in.
+#: Explicit ``m_ExternalFiles`` references are authoritative and never capped.
+_MAX_GLOB_SIBLINGS = 256
+
 
 class UnityError(Exception):
     pass
@@ -37,10 +43,14 @@ class UnityArchive:
         """Pre-load sibling stream files (.resS / .resource / .split*).
 
         UnityPy resolves external streams lazily relative to the bundle's
-        folder, but only for CAB names listed in m_ExternalFiles. Eagerly
-        registering every matching sibling here also covers files whose
-        on-disk name differs from the CAB reference, so streamed textures,
-        audio and mesh data decode reliably.
+        folder, but only for CAB names listed in m_ExternalFiles. This eagerly
+        registers the files those references point at, plus siblings named after
+        this bundle, so streamed textures, audio and mesh data decode reliably.
+
+        Directory scans are deliberately narrow (this bundle's stem and Unity's
+        ``CAB-*`` naming) and bounded by :data:`_MAX_GLOB_SIBLINGS`: a bundle
+        opened next to thousands of unrelated ``.resS`` files must not drag them
+        all into the environment.
         """
         import os
 
@@ -60,18 +70,27 @@ class UnityArchive:
         except Exception:
             logger.debug("could not read external stream refs for %s", self.path, exc_info=True)
         stem = Path(self.path).stem
+        globbed = 0
         try:
             for pattern in (
                 f"{stem}.resS",
                 f"{stem}.resource",
                 f"{stem}.split*",
                 "CAB-*.resS",
-                "*.resS",
-                "*.resA",
-                "*.resH",
-                "*.resource",
             ):
-                candidates.extend(directory.glob(pattern))
+                for match in directory.glob(pattern):
+                    if globbed >= _MAX_GLOB_SIBLINGS:
+                        logger.warning(
+                            "sibling stream scan for %s hit the %d-file cap; "
+                            "loading only the files found so far",
+                            self.path,
+                            _MAX_GLOB_SIBLINGS,
+                        )
+                        break
+                    candidates.append(match)
+                    globbed += 1
+                if globbed >= _MAX_GLOB_SIBLINGS:
+                    break
         except OSError:
             pass
         seen = set()

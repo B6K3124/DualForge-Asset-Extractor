@@ -94,6 +94,15 @@ class Footer:
         self.is_frozen = False
         self.compresion = None
         self.compression_names: list[str] = []
+        # UE 6.0 trailer fields (raw footer version >= 14/15). ``encryption_method``
+        # is an EIoEncryptionMethod: 0 = none, 1 = AES (ECB), 2 = AES-CTR. The
+        # three 12-byte IVs drive CTR decryption of the primary index, the path
+        # hash index and the full directory index respectively.
+        self.pakchunk_index = -1
+        self.encryption_method = 0
+        self.index_iv = b""
+        self.path_hash_index_iv = b""
+        self.full_directory_index_iv = b""
 
     def read(self, reader: Reader):
         """Read the footer of the pak file."""
@@ -101,13 +110,21 @@ class Footer:
         magic_pos, _, _ = locate_footer(reader)
         self.version = check_pak_version(reader)
 
-        # Read forward from the located magic rather than seeking to a
-        # hardcoded offset from EOF: the encryption-key GUID and the magic have
-        # both moved between engine versions.
-        reader.set_pos(magic_pos - 17)
-        self.encryption_key = reader.read(16)
-        self.is_encrypted = reader.uint8() == 1
+        # The encryption-key GUID and is-encrypted byte only exist in newer
+        # footers; older layouts start straight at the magic. Reading 17 bytes
+        # before the magic unconditionally made V1-V3 footers interpret pak data
+        # as a key GUID/flag, which could randomly mark them "encrypted" and send
+        # an unencrypted archive down the AES path. The sizes here mirror
+        # Footer.write below (GUID at V7, flag at V4).
+        guid_size = 16 if self.version >= PakVersion.V7 else 0
+        flag_size = 1 if self.version >= PakVersion.V4 else 0
+        if flag_size:
+            reader.set_pos(magic_pos - guid_size - flag_size)
+            if guid_size:
+                self.encryption_key = reader.read(16)
+            self.is_encrypted = reader.uint8() == 1
 
+        reader.set_pos(magic_pos)
         magic = reader.uint32()
         if magic != PAK_MAGIC:  # pragma: no cover - locate_footer just checked
             logger.error("Invalid pak file magic: %X", magic)
@@ -168,6 +185,16 @@ class Footer:
                 )
             self.compresion.append(method)
             self.compression_names.append(name)
+
+        # UE 6.0 appends a pakchunk index and (from raw version 15) an encryption
+        # method plus the three index IVs after the compression table. This is
+        # what lets AES-CTR paks be decrypted instead of mis-read as AES-ECB.
+        if self.version >= PakVersion.V13:
+            self.pakchunk_index = reader.int32()
+            self.encryption_method = reader.uint8()
+            self.index_iv = reader.read(12)
+            self.path_hash_index_iv = reader.read(12)
+            self.full_directory_index_iv = reader.read(12)
 
         logger.debug(
             "Footer:"

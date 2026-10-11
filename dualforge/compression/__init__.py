@@ -7,7 +7,12 @@ import lzma
 import zlib
 import zipfile
 
-from dualforge.compression.oodle import Oodle, OodleDecompressError, OodleUnavailableError
+from dualforge.compression.oodle import (
+    MAX_DECOMPRESSED_SIZE,
+    Oodle,
+    OodleDecompressError,
+    OodleUnavailableError,
+)
 from dualforge.log import get_logger
 
 logger = get_logger(__name__)
@@ -105,11 +110,9 @@ def is_available(method: str) -> bool:
         except CompressionError:
             return False
     if method == "oodle":
-        try:
-            Oodle()
-            return True
-        except OodleUnavailableError:
-            return False
+        from dualforge.compression.oodle import find_oodle_dll
+
+        return find_oodle_dll() is not None
     if method == "snappy":
         try:
             _snappy()
@@ -127,6 +130,59 @@ def is_available(method: str) -> bool:
     return False
 
 
+def _bomb(method: str) -> CompressionError:
+    return CompressionError(
+        f"{method} output exceeds the {MAX_DECOMPRESSED_SIZE}-byte safety "
+        f"limit (possible decompression bomb)"
+    )
+
+
+def _check_expected_size(output_size: int | None) -> None:
+    """Reject caller-supplied sizes above the cap before allocating anything."""
+    if output_size is None:
+        return
+    if output_size < 0:
+        raise CompressionError(
+            f"negative output_size ({output_size}) is not valid"
+        )
+    if output_size > MAX_DECOMPRESSED_SIZE:
+        raise CompressionError(
+            f"output_size {output_size} exceeds the "
+            f"{MAX_DECOMPRESSED_SIZE}-byte safety limit"
+        )
+
+
+def _bounded_zlib(data: bytes) -> bytes:
+    """zlib.decompress bounded: asks for one byte over the cap to detect bombs."""
+    out = zlib.decompressobj().decompress(data, MAX_DECOMPRESSED_SIZE + 1)
+    if len(out) > MAX_DECOMPRESSED_SIZE:
+        raise _bomb("zlib")
+    return out
+
+
+def _bounded_gzip(data: bytes) -> bytes:
+    """gzip.decompress bounded via streaming read of cap+1 bytes."""
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as f:
+        out = f.read(MAX_DECOMPRESSED_SIZE + 1)
+    if len(out) > MAX_DECOMPRESSED_SIZE:
+        raise _bomb("gzip")
+    return out
+
+
+def _bounded_bz2(data: bytes) -> bytes:
+    out = bz2.BZ2Decompressor().decompress(data, MAX_DECOMPRESSED_SIZE + 1)
+    if len(out) > MAX_DECOMPRESSED_SIZE:
+        raise _bomb("bz2")
+    return out
+
+
+def _bounded_lzma(data: bytes) -> bytes:
+    out = lzma.LZMADecompressor().decompress(data, MAX_DECOMPRESSED_SIZE + 1)
+    if len(out) > MAX_DECOMPRESSED_SIZE:
+        raise _bomb("lzma")
+    return out
+
+
 def decompress(
     data: bytes,
     method: str,
@@ -135,19 +191,24 @@ def decompress(
     oodle_dll: str | None = None,
 ) -> bytes:
     method = (method or "none").lower()
+    _check_expected_size(output_size)
     if method == "none":
         return data
     if method == "zlib":
-        return zlib.decompress(data)
+        return _bounded_zlib(data)
     if method == "gzip":
-        return gzip.decompress(data)
+        return _bounded_gzip(data)
     if method == "bz2":
-        return bz2.decompress(data)
+        return _bounded_bz2(data)
     if method == "lzma":
-        return lzma.decompress(data)
+        return _bounded_lzma(data)
     if method in {"lz4", "lz4hc"}:
         if data.startswith(b"\x04\x22\x4d\x18"):
-            return _lz4_frame().decompress(data)
+            frame = _lz4_frame().LZ4FrameDecompressor()
+            out = frame.decompress(data, MAX_DECOMPRESSED_SIZE + 1)
+            if len(out) > MAX_DECOMPRESSED_SIZE:
+                raise _bomb("lz4")
+            return out
         block = _lz4_block()
         try:
             return block.decompress(data)
@@ -157,11 +218,20 @@ def decompress(
             logger.debug("lz4 block retry with explicit output_size")
             return block.decompress(data, uncompressed_size=output_size)
     if method == "zstd":
-        max_size = output_size or 2 ** 31 - 1
+        max_size = min(output_size or MAX_DECOMPRESSED_SIZE, MAX_DECOMPRESSED_SIZE)
         return _zstandard().ZstdDecompressor().decompress(data, max_output_size=max_size)
     if method == "brotli":
-        return _brotli().decompress(data)
+        d = _brotli().Decompressor()
+        out = bytearray()
+        for i in range(0, len(data), 1 << 20):
+            out += d.process(data[i : i + (1 << 20)])
+            if len(out) > MAX_DECOMPRESSED_SIZE:
+                raise _bomb("brotli")
+        return bytes(out)
     if method == "snappy":
+        n = _snappy().uncompressed_length(data)
+        if n > MAX_DECOMPRESSED_SIZE:
+            raise _bomb("snappy")
         return _snappy().uncompress(data)
     if method == "oodle":
         if output_size is None:
@@ -176,18 +246,30 @@ def decompress(
 
 def _extract_zip(data: bytes, member: str | None) -> bytes:
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        names = zf.namelist()
         if member is not None:
+            info = zf.getinfo(member)
+            if info.file_size > MAX_DECOMPRESSED_SIZE:
+                raise _bomb("zip")
             return zf.read(member)
-        for name in names:
-            if not name.endswith("/"):
-                return zf.read(name)
+        for info in zf.infolist():
+            if not info.filename.endswith("/"):
+                if info.file_size > MAX_DECOMPRESSED_SIZE:
+                    raise _bomb("zip")
+                return zf.read(info.filename)
     raise CompressionError("zip archive contains no files")
+
+
+def _check_py7zr_members(infos) -> None:
+    for info in infos:
+        size = getattr(info, "uncompressed", None)
+        if size is not None and size > MAX_DECOMPRESSED_SIZE:
+            raise _bomb("7z")
 
 
 def _extract_7z(data: bytes, member: str | None) -> bytes:
     py7zr = _py7zr()
     with py7zr.SevenZipFile(io.BytesIO(data), mode="r") as archive:
+        _check_py7zr_members(archive.list())
         if member is not None:
             with archive.read([member]) as extracted:
                 for out in extracted.values():
@@ -212,9 +294,13 @@ def compress(data: bytes, method: str, level: int | None = None) -> bytes:
     if method == "gzip":
         return gzip.compress(data, compresslevel=level if level is not None else 6)
     if method == "lz4":
-        # Unreal's pak "LZ4" is the raw block format, not the framed one.
+        # Unreal stores a raw LZ4 block with no size prefix; the uncompressed
+        # size lives in the pak block table, so store_size must be False.
         return _lz4_block().compress(
-            data, compression_level=level if level is not None else 9
+            data,
+            mode="high_compression",
+            compression=level if level is not None else 9,
+            store_size=False,
         )
     if method == "zstd":
         level = level or 19

@@ -4,7 +4,7 @@ from collections import defaultdict
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
-from .entry import Entry
+from .entry import Entry, decrypt_ctr, _ENCRYPTION_METHOD_AES_CTR
 from .file_io import Reader, Writer
 from .utils import fnv64, fnv64_path, split_path_child, COMPRESSION
 from .version import PakVersion
@@ -51,6 +51,26 @@ def read_flat_directory_index(reader: Reader, magic: int) -> dict[str, dict[str,
         raise ValueError("corrupt pak FullDirectoryIndex (flat)")
 
     num_dir_anchors = (num_dirs + restart_interval - 1) // restart_interval
+
+    # Bound every count against the bytes actually left before allocating
+    # anything for them. The header values are attacker-controlled, so a huge
+    # num_files with a tiny buffer must be rejected here rather than turned into
+    # a multi-gigabyte list comprehension.
+    remaining = reader.get_size() - reader.get_pos()
+    needed = (
+        num_path_hashes * 12  # SortedPathHashes (8) + HashLocations (4)
+        + (num_dir_anchors + 1) * 4  # DirAnchorOffset
+        + (num_dirs + 1) * 4  # DirFileStart
+        + (num_files + 1) * 4  # FileNameOffsets
+        + num_files * 4  # FileLocations
+        + dir_blob_bytes
+        + file_blob_bytes
+    )
+    if needed > remaining:
+        raise ValueError(
+            "corrupt pak FullDirectoryIndex (flat): header declares more data "
+            f"({needed} bytes) than the {remaining} bytes remaining"
+        )
 
     reader.set_pos(
         reader.get_pos()
@@ -133,12 +153,23 @@ class Index:
         is_encrypted = footer.is_encrypted
         compressions = footer.compresion
         compression_names = getattr(footer, "compression_names", None)
+        encryption_method = getattr(footer, "encryption_method", 0)
+
+        def decrypt_unit(buf: bytes, iv: bytes) -> bytes:
+            if encryption_method == _ENCRYPTION_METHOD_AES_CTR:
+                return decrypt_ctr(key, buf, iv)
+            return decrypt(key, buf)
 
         logger.debug("Reading index...")
         index_reader = reader.buffer(index_offset, index_size)
 
         if is_encrypted:
-            index_reader = Reader(decrypt(key, index_reader.read(index_size)))
+            index_reader = Reader(
+                decrypt_unit(
+                    index_reader.read(index_size),
+                    getattr(footer, "index_iv", b""),
+                )
+            )
 
         self.mount_point = index_reader.string()
         self.entry_count = index_reader.uint32()
@@ -160,7 +191,10 @@ class Index:
 
                 if is_encrypted:
                     path_hash_index_reader = Reader(
-                        decrypt(key, path_hash_index_reader.read(path_hash_index_size))
+                        decrypt_unit(
+                            path_hash_index_reader.read(path_hash_index_size),
+                            getattr(footer, "path_hash_index_iv", b""),
+                        )
                     )
 
                 count = path_hash_index_reader.uint32()
@@ -184,9 +218,9 @@ class Index:
 
                 if is_encrypted:
                     full_directory_index_reader = Reader(
-                        decrypt(
-                            key,
+                        decrypt_unit(
                             full_directory_index_reader.read(full_directory_index_size),
+                            getattr(footer, "full_directory_index_iv", b""),
                         )
                     )
 
@@ -241,6 +275,7 @@ class Index:
                                     version,
                                     compressions,
                                     compression_names,
+                                    encryption_method=encryption_method,
                                 )
                             else:
                                 index = -encoded_offset - 1
