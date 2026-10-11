@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt
 
 from dualforge.drivers import registry
 from dualforge.drivers.driver import DRIVER_FILE_SUFFIX
+from dualforge.ui.driver_edit_dialog import DriverEditDialog
 
 
 class DriversDialog(QDialog):
@@ -94,6 +95,9 @@ class DriversDialog(QDialog):
         )
         create_btn.setProperty("role", "primary")
         create_btn.clicked.connect(self._create_from_archive)
+        edit_btn = QPushButton("Edit Selected...")
+        edit_btn.setToolTip("Review and correct the selected driver, then save it")
+        edit_btn.clicked.connect(self._edit_selected)
         export_btn = QPushButton("Export Selected")
         export_btn.clicked.connect(self._export_selected)
         export_all_btn = QPushButton("Export All")
@@ -104,6 +108,7 @@ class DriversDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         buttons.addWidget(import_btn)
         buttons.addWidget(create_btn)
+        buttons.addWidget(edit_btn)
         buttons.addWidget(export_btn)
         buttons.addWidget(export_all_btn)
         buttons.addWidget(export_builtin_btn)
@@ -276,14 +281,37 @@ class DriversDialog(QDialog):
             return
         if registry.get(driver.name) is not None:
             driver.name = f"{driver.name}-auto"
-        registry.register(driver)
+        dialog = DriverEditDialog(driver, mode="create", parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        driver = dialog.driver
+        self._save_driver(driver, created=True)
+
+    def _edit_selected(self) -> None:
+        driver = self._current_driver()
+        if driver is None:
+            QMessageBox.information(self, "Edit Driver", "Select a driver to edit first.")
+            return
+        dialog = DriverEditDialog(driver, mode="edit", parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._save_driver(dialog.driver, created=False)
+
+    def _save_driver(self, driver, created: bool) -> None:
+        """Register the driver and persist it to ~/.dualforge/drivers/."""
+        try:
+            written = registry.save(driver)
+        except OSError as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
         self._rebuild_list()
         self._select_named(driver.name)
         self.detail.setText(
-            f"<b>Auto-created driver</b> from archive.<br><br>"
-            f"Engine: <b>{driver.engine}</b><br>"
-            f"Scheme: <b>{driver.encryption_scheme}</b><br>"
-            f"Review and export it to save as a file."
+            f"<b>{'Created' if created else 'Saved'} driver</b> and registered it."
+            f"<br>Name: <code>{driver.name}</code>"
+            f"<br>Scheme: <b>{driver.encryption_scheme}</b>"
+            f"{'<br>CUE4Parse EGame: ' + driver.egame if driver.egame else ''}"
+            f"<br>Stored at: <code>{written}</code>"
         )
 
     def _select_named(self, name: str) -> None:

@@ -13,10 +13,19 @@ from dualforge.drivers.driver import DRIVER_FILE_SUFFIX, GameDriver
 from dualforge.log import get_logger
 import builtins
 import contextlib
+import os
 
 logger = get_logger(__name__)
 
 DEFAULT_DRIVERS_DIR = Path.home() / ".dualforge" / "drivers"
+
+
+def default_drivers_dir() -> Path:
+    """User-driver directory, overridable via ``DUALFORGE_DRIVERS_DIR``."""
+    override = os.environ.get("DUALFORGE_DRIVERS_DIR")
+    if override:
+        return Path(override)
+    return DEFAULT_DRIVERS_DIR
 
 # Archive-name patterns that every title in an engine family shares, so a
 # pattern-only match on them cannot identify a game. Used to keep unknown
@@ -24,6 +33,8 @@ DEFAULT_DRIVERS_DIR = Path.home() / ".dualforge" / "drivers"
 GENERIC_ARCHIVE_PATTERNS = frozenset(
     {
         "pakchunk*-Windows.pak",
+        "pakchunk*-WindowsNoEditor.pak",
+        "pakchunk*-WindowsNoEditor*.pak",
         "*.assets",
         "*.bundle",
         "*.assetbundle",
@@ -32,10 +43,6 @@ GENERIC_ARCHIVE_PATTERNS = frozenset(
         "*.ba2",
     }
 )
-
-
-def default_drivers_dir() -> Path:
-    return DEFAULT_DRIVERS_DIR
 
 
 class DriverRegistry:

@@ -38,8 +38,10 @@ def build_driver_from_archive(
     if detection is not None:
         engine = detection.engine
 
-    game_name = name or _slug(path.parent.name) or path.stem
-    game_label = label or path.parent.name or path.stem if engine in ("unity", "unreal") else label or "Generic Game"
+    hint_name, hint_label = _game_hint(path, engine)
+    game_name = name or hint_name
+    game_label = label or hint_label
+    scheme = _suggest_scheme(path, engine)
 
     driver = GameDriver(
         name=game_name,
@@ -47,9 +49,9 @@ def build_driver_from_archive(
         engine=engine,
         game_fragments=_fragments(path),
         archive_patterns=_patterns(path),
-        encryption_scheme=_suggest_scheme(path, engine),
+        encryption_scheme=scheme,
         export_formats=_format_defaults(engine),
-        egame=_suggest_egame(detection),
+        egame=_suggest_egame(detection, scheme),
         author="DualForge (auto-detected)",
         notes=_notes(detection),
     )
@@ -62,31 +64,74 @@ def _slug(text: str) -> str:
     return cleaned or "archived-game"
 
 
+_GENERIC_DIRS = {
+    "windows", "win64", "shipping", "game", "paks", "content",
+    "steamapps", "steamlibrary", "common", "minor0", "minor",
+    "data", "assets", "bin", "local", "android", "ios",
+}
+
+
+def _game_hint(path: Path, engine: str) -> tuple[str, str]:
+    """Guess a driver name/label from the nearest non-generic ancestor folder."""
+    fallback = _slug(path.parent.name) or path.stem
+    label = path.parent.name or path.stem
+    probe = path.parent
+    for _ in range(5):
+        if probe is None or probe.parent == probe:
+            break
+        if probe.name.lower() not in _GENERIC_DIRS and probe.name:
+            label = probe.name
+            fallback = _slug(probe.name)
+            break
+        probe = probe.parent
+    if engine not in ("unity", "unreal"):
+        return fallback, "Generic Game"
+    return fallback, label
+
+
 def _fragments(path: Path) -> list:
     frags = [path.stem, path.parent.name]
-    # Strip common suffixes that aren't the game name
+    probe = path.parent.parent
+    for _ in range(4):
+        if probe is None or probe.parent == probe:
+            break
+        frags.append(probe.name)
+        probe = probe.parent
+    # Strip generic dirs that aren't the game name, and trailing filename noise.
     cleaned = []
     for frag in frags:
+        low = frag.lower()
         for suffix in ("windows", "win64", "shipping", "game", "paks", "content"):
-            if frag.lower() == suffix:
+            if low == suffix or low.endswith(suffix):
                 frag = ""
                 break
-        if frag:
+        if not frag or frag.lower() in _GENERIC_DIRS:
+            continue
+        if frag.lower() not in {c.lower() for c in cleaned}:
             cleaned.append(frag)
-    return list(dict.fromkeys(cleaned))
+    return list(dict.fromkeys(cleaned)) or [path.stem]
 
 
 def _patterns(path: Path) -> list:
-    return [path.name]
+    import re
+
+    name = path.name
+    if name.lower().startswith("pakchunk") and name.lower().endswith(".pak"):
+        pattern = re.sub(r"^pakchunk\d+", "pakchunk*", name)
+        pattern = re.sub(r"_\d+(\.\d+)+.*", "*", pattern)
+        if not pattern.endswith(".pak"):
+            pattern += ".pak"
+        return [pattern]
+    return [name]
 
 
 def _suggest_scheme(path: Path, engine: str) -> str:
     try:
         from dualforge.encryption.presets import guess_scheme
 
-        preset = guess_scheme(archive_name=path.name, mount=path.parent.name)
+        preset = guess_scheme(mount=path.parent.as_posix(), archive_name=path.name)
         if preset is not None:
-            return preset.name
+            return preset.stages[0] if preset.stages else preset.name
     except Exception:
         logger.debug("scheme suggestion failed for %s", path, exc_info=True)
         pass
@@ -95,12 +140,16 @@ def _suggest_scheme(path: Path, engine: str) -> str:
     return "aes-256"
 
 
-def _suggest_egame(detection) -> str:
+def _suggest_egame(detection, scheme: str = "") -> str:
     if detection is None or detection.engine != "unreal":
         return ""
     try:
-        from dualforge.unreal.uex_adapter import FOLDER_GAMES, VERSION_GAMES
+        from dualforge.unreal.uex_adapter import FOLDER_GAMES, SCHEME_GAMES, VERSION_GAMES
 
+        if scheme in SCHEME_GAMES:
+            return SCHEME_GAMES[scheme]
+        if scheme == "sm4-abi":
+            return "GAME_ArenaBreakoutInfinite"
         lowered = str(detection.path).lower()
         for needle, game in FOLDER_GAMES:
             if needle in lowered:

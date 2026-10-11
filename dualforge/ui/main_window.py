@@ -371,6 +371,11 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         keys_btn = toolbar.addAction(make_toolbar_icon("keys", color), "Keys")
         keys_btn.triggered.connect(self.manage_keys)
+        drivers_btn = toolbar.addAction(make_toolbar_icon("driver", color), "Drivers")
+        drivers_btn.setToolTip(
+            "Create, edit, match and import game drivers (engine, encryption scheme, formats)"
+        )
+        drivers_btn.triggered.connect(self.open_drivers)
         self._toolbar_extract = extract_btn
         self._toolbar_actions = {
             "open": open_btn,
@@ -378,6 +383,7 @@ class MainWindow(QMainWindow):
             "extract": extract_btn,
             "extract2": export_btn,
             "keys": keys_btn,
+            "driver": drivers_btn,
         }
 
         toolbar.addSeparator()

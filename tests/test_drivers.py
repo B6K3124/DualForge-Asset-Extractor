@@ -469,12 +469,16 @@ def test_build_driver_from_unrecognized_archive(tmp_path):
     assert driver.notes
 
 
-def test_registry_match_prefers_generic_on_ambiguous_tie():
+def test_registry_match_prefers_generic_on_ambiguous_tie(monkeypatch):
     """An unknown game (no fragment/pattern matched) must not be mislabeled as
     a specific title when every unreal driver only ties on the engine-baseline.
     Regression: unknown paks like 'ABInfinite' used to match 'fortnite' just
     because fortnite happened to be iterated first."""
     from dualforge.drivers.registry import DriverRegistry
+
+    # This test describes *built-in* resolution; skip user-installed drivers
+    # (which legitimately beat the built-ins for their titles).
+    monkeypatch.setattr(DriverRegistry, "_load_user_dir", lambda self: None)
 
     reg = DriverRegistry()
     reg._ensure_loaded()

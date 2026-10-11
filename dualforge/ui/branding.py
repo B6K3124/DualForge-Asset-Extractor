@@ -165,6 +165,17 @@ def _draw_donate(painter: QPainter, s: float, color: str) -> None:
     painter.drawPath(path)
 
 
+def _draw_driver(painter: QPainter, s: float, color: str) -> None:
+    pen = _icon_pen(color, s, 0.08)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(QRectF(0.10 * s, 0.18 * s, 0.80 * s, 0.64 * s), 0.12 * s, 0.12 * s)
+    painter.drawRoundedRect(QRectF(0.28 * s, 0.30 * s, 0.44 * s, 0.40 * s), 0.08 * s, 0.08 * s)
+    for fx in (0.24, 0.34, 0.44, 0.54):
+        painter.drawLine(fx * s, 0.14 * s, fx * s, 0.22 * s)
+        painter.drawLine(fx * s, 0.78 * s, fx * s, 0.86 * s)
+
+
 _draw_folder = _draw_open
 
 
@@ -173,6 +184,7 @@ _ICON_PAINTERS: dict[str, _IconPainter] = {
     "folder": _draw_folder,
     "extract": _draw_extract,
     "keys": _draw_keys,
+    "driver": _draw_driver,
     "donate": _draw_donate,
     "update": _draw_update,
 }

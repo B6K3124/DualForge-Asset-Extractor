@@ -123,9 +123,11 @@ def _cmd_drivers_create(args: argparse.Namespace) -> int:
     driver = build_driver_from_archive(args.archive, name=args.name, label=args.label)
     if args.out:
         written = registry.save(driver, args.out)
+        installed = registry.save(driver)
         print(
             f"created and saved driver '{driver.name}' ({driver.label}) -> {written}"
         )
+        print(f"installed for DualForge: {installed}")
     else:
         print(f"created driver '{driver.name}' ({driver.label})")
     print(driver.to_json())
