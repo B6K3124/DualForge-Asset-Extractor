@@ -12,6 +12,7 @@ from dualforge.cli_commands.codecs import _cmd_codecs
 from dualforge.cli_commands.crack import (
     _cmd_crack_offline,
     _cmd_crack_run,
+    _cmd_crack_run_unity,
     _cmd_crack_status,
 )
 from dualforge.cli_commands.detect import _cmd_detect
@@ -54,6 +55,7 @@ __all__ = [
     "_cmd_codecs",
     "_cmd_crack_offline",
     "_cmd_crack_run",
+    "_cmd_crack_run_unity",
     "_cmd_crack_status",
     "_cmd_detect",
     "_cmd_drivers_create",

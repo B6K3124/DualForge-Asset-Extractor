@@ -13,10 +13,13 @@ Candidate sources, in order of precision:
   Static key material almost always sits next to one of these.
 * a bounded raw-window pass over the whole readable address space for keys that
   live far from any signature.
+* a bounded printable-ASCII pass for case-sensitive Unity CN 16-char mask keys.
 
 All candidate hex keys are deduplicated, ranked by (length, entropy) and run
 through scheme-aware validation against the pak (``aes-256``, per-game presets,
-``sm4-abi``, ...) so offline keys verify exactly like static ones.
+``sm4-abi``, ...) so offline keys verify exactly like static ones. The hunt is
+adaptive: if too few unique candidates surface, thresholds are lowered and
+memory is resampled (bounded by ``min_candidates``).
 """
 
 from __future__ import annotations
@@ -47,8 +50,10 @@ _TEXT_ANCHORS: dict[str, bytes] = {
 
 def _load_ghidra_finder() -> object | None:
     """Load the vendored Ghidra hunt script for its signature tables."""
-    script = Path(__file__).resolve().parent.parent / "scripts" / "ghidra" / "ghidra_key_finder.py"
-    if not script.is_file():
+    from dualforge.ghidra.manager import hunter_script_path
+
+    script = hunter_script_path()
+    if script is None:
         return None
     name = "dualforge_offline_finder"
     spec = importlib.util.spec_from_file_location(name, script)
@@ -131,12 +136,14 @@ def collect_candidates(
     threshold: float = 3.5,
     raw_threshold: float | None = None,
     max_per_match: int = 256,
+    ascii_threshold: float = 3.0,
 ) -> list[Candidate]:
     """Pull key-sized candidates from a context buffer near a signature.
 
-    Two passes: printable 64/32-hex-character windows (ASCII-encoded keys) and
-    raw high-entropy 16/32-byte windows (binary keys). ``context_offset`` is
-    the context's absolute offset in the process address space.
+    Passes: printable 64/32-hex-character windows (ASCII-encoded keys), raw
+    high-entropy 16/32-byte windows (binary keys), and printable-ASCII
+    16/32-char masks (Unity CN keys, original case preserved). ``context_offset``
+    is the context's absolute offset in the process address space.
     """
     if raw_threshold is None:
         raw_threshold = 3.75
@@ -192,6 +199,40 @@ def collect_candidates(
                 offset=context_offset + i,
                 source="raw",
             )
+
+    # ASCII-mask pass: Unity CN keys are 16 printable chars whose original case
+    # is meaningful, so slice printable runs directly (no hex decoding).
+    ascii_lengths = tuple(kl for kl in (16, max_length) if min_length <= kl <= max_length)
+    if ascii_lengths:
+        n = len(context)
+        pos = 0
+        while pos < n:
+            byte = context[pos]
+            if not (32 <= byte < 127):
+                pos += 1
+                continue
+            end = pos
+            while end < n and 32 <= context[end] < 127:
+                end += 1
+            run = context[pos:end]
+            if len(run) >= 16:
+                for kl in ascii_lengths:
+                    for start in range(0, len(run) - kl + 1):
+                        window = run[start : start + kl]
+                        entropy = shannon_entropy(window)
+                        if entropy < ascii_threshold:
+                            continue
+                        value = window.decode("ascii")
+                        if value in seen_hex:
+                            continue
+                        found[(kl, pos + start, 2)] = Candidate(
+                            hex_value=value,
+                            entropy=round(entropy, 4),
+                            length=kl,
+                            offset=context_offset + pos + start,
+                            source="ascii",
+                        )
+            pos = end
 
     ranked = sorted(found.values(), key=lambda c: (-c.entropy, -c.length, c.offset))
     return ranked[:max_per_match]
@@ -284,6 +325,69 @@ def harvest_raw_windows(
     return out
 
 
+def harvest_ascii_windows(
+    reader: ProcessReader,
+    max_windows: int = 60_000,
+    key_sizes: tuple[int, ...] = (16, 32),
+    threshold: float = 3.0,
+    chunk_size: int = _CHUNK,
+) -> list[Candidate]:
+    """Signature-free pass for printable-ASCII mask keys (Unity CN).
+
+    Mirrors :func:`harvest_raw_windows` but harvests the first key-sized window
+    of each printable run it samples, keeping original case (Unity CN masks are
+    case-sensitive). ``max_windows`` bounds run evaluations per region so the
+    pass stays fast on multi-GB processes.
+    """
+    regions = list(reader.readable_regions())
+    total = sum(size for _base, size in regions)
+    if total <= 0:
+        return []
+    key_sizes = tuple(sorted(key_sizes, reverse=True))
+    out: list[Candidate] = []
+    for base, size in regions:
+        if size < min(key_sizes):
+            continue
+        share = max(1, int(max_windows * size / total))
+        for pos, chunk in reader.read_chunks(base, size):
+            n = len(chunk)
+            if n < min(key_sizes):
+                continue
+            chunk_windows = max(1, share * n // size)
+            stride = max(1, n // chunk_windows)
+            scan = 0
+            sampled = 0
+            while scan < n and sampled < chunk_windows:
+                byte = chunk[scan]
+                if not (32 <= byte < 127):
+                    scan += 1
+                    continue
+                end = scan
+                while end < n and 32 <= chunk[end] < 127:
+                    end += 1
+                run = chunk[scan:end]
+                if len(run) >= min(key_sizes):
+                    for kl in key_sizes:
+                        if kl > len(run):
+                            continue
+                        window = run[:kl]
+                        entropy = shannon_entropy(window)
+                        if entropy >= threshold:
+                            out.append(
+                                Candidate(
+                                    hex_value=window.decode("ascii"),
+                                    entropy=round(entropy, 4),
+                                    length=kl,
+                                    offset=pos + scan,
+                                    source="ascii-window",
+                                )
+                            )
+                            break
+                    sampled += 1
+                scan = max(end, scan + stride)
+    return out
+
+
 def _rank_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
     """Deduplicate by hex value and rank by (length, entropy)."""
     best: dict[str, Candidate] = {}
@@ -295,6 +399,29 @@ def _rank_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]
             best[candidate.hex_value] = candidate
     ranked = sorted(best.values(), key=lambda c: (-c.entropy, -c.length))
     return ranked[:limit]
+
+
+def detect_target_engine(target: str | None) -> str:
+    """Best-effort engine of a validation target (file or folder).
+
+    Returns ``"unreal"`` for pak/IoStore files or folders containing paks,
+    ``"unity"`` for Unity bundles/serialized files or folders with Unity data.
+    """
+    if not target:
+        return "unreal"
+    p = Path(target).resolve()
+    if p.is_file():
+        ext = p.suffix.lower()
+        if ext in (".pak", ".utoc", ".ucas"):
+            return "unreal"
+        return "unity"
+    try:
+        for pak in p.rglob("*.pak"):
+            if pak.is_file():
+                return "unreal"
+    except OSError:
+        return "unity"
+    return "unity"
 
 
 def crack_offline(
@@ -310,9 +437,17 @@ def crack_offline(
     entropy_threshold: float = 3.5,
     raw_threshold: float | None = None,
     raw_windows: int = 250_000,
+    ascii_windows: int = 60_000,
+    min_candidates: int = 8,
+    engine: str = "auto",
     log: object | None = None,
 ) -> dict:
-    """Run the offline runtime key hunt; return a :func:`crack`-like result."""
+    """Run the offline runtime key hunt; return a :func:`crack`-like result.
+
+    Candidate harvesting is adaptive: when the first pass yields too few
+    candidates, the raw-window threshold is lowered and memory is resampled so
+    low-entropy keys that the default thresholds would miss are still seen.
+    """
     def _emit(msg: str) -> None:
         if log is not None:
             log(msg)
@@ -325,35 +460,65 @@ def crack_offline(
     bytes_scanned = 0
     with ProcessReader(resolved_pid) as reader:
         signatures = default_signatures()
-        _emit(f"scanning for {len(signatures)} signature(s)...")
-        matches = scan_signature_matches(
-            reader,
-            signatures=signatures,
-            context_size=context_size,
-            threshold=entropy_threshold,
-            raw_threshold=raw_threshold,
-        )
-        for match in matches:
-            candidates.extend(match.candidates)
+        matches: list[Match] = []
+        for attempt in range(3):
+            active_raw = (
+                raw_threshold
+                if raw_threshold is not None
+                else max(3.5, 3.75 - 0.15 * attempt)
+            )
+            _emit(f"scanning for {len(signatures)} signature(s) (raw threshold {active_raw:.2f})...")
+            attempt_matches = scan_signature_matches(
+                reader,
+                signatures=signatures,
+                context_size=context_size,
+                threshold=entropy_threshold,
+                raw_threshold=active_raw,
+            )
+            _emit("sampling high-entropy windows across memory...")
+            harvested = harvest_raw_windows(reader, max_windows=raw_windows, threshold=active_raw)
+            ascii_harvest = harvest_ascii_windows(reader, max_windows=ascii_windows)
+            bytes_scanned = sum(size for _base, size in reader.readable_regions())
+            matches.extend(attempt_matches)
+            seen = {c.hex_value for c in candidates}
+            for candidate in harvested + ascii_harvest:
+                if candidate.hex_value not in seen:
+                    candidates.append(candidate)
+                    seen.add(candidate.hex_value)
+            for match in attempt_matches:
+                for candidate in match.candidates:
+                    if candidate.hex_value not in seen:
+                        candidates.append(candidate)
+                        seen.add(candidate.hex_value)
+            if raw_threshold is not None or len(seen) >= min_candidates or attempt == 2:
+                break
 
-        _emit("sampling high-entropy windows across memory...")
-        candidates.extend(
-            harvest_raw_windows(reader, max_windows=raw_windows, threshold=raw_threshold or 3.75)
-        )
-        bytes_scanned = sum(size for _base, size in reader.readable_regions())
+    deduped: dict[tuple[str, int], Match] = {}
+    for match in matches:
+        deduped.setdefault((match.signature, match.offset), match)
+    matches = list(deduped.values())
 
     ranked = _rank_candidates(candidates, max_candidates)
     hexes = [c.hex_value for c in ranked]
 
+    target_engine = engine if engine and engine != "auto" else detect_target_engine(pak)
     verified_keys: list[VerifiedKey] = []
     pak_path: str | None = None
     if pak:
-        pak_path = find_validation_pak(pak)
-        _emit(f"validation pak: {Path(pak_path).name}")
-        verified_keys = validate_keys_against_pak(
-            pak_path, hexes, block_count=block_count, scheme=scheme, game=Path(exe).stem
-        )
-        _emit(f"validated {len(verified_keys)} key(s) against the pak")
+        if target_engine == "unity":
+            from dualforge.crack import find_validation_bundle, validate_keys_against_unity
+
+            pak_path = find_validation_bundle(pak)
+            _emit(f"validation bundle: {Path(pak_path).name}")
+            verified_keys = validate_keys_against_unity(pak_path, hexes, scheme=scheme)
+            _emit(f"validated {len(verified_keys)} key(s) against the bundle")
+        else:
+            pak_path = find_validation_pak(pak)
+            _emit(f"validation pak: {Path(pak_path).name}")
+            verified_keys = validate_keys_against_pak(
+                pak_path, hexes, block_count=block_count, scheme=scheme, game=Path(exe).stem
+            )
+            _emit(f"validated {len(verified_keys)} key(s) against the pak")
     verified = [vk.key for vk in verified_keys]
 
     saved: list[str] = []
@@ -366,7 +531,7 @@ def crack_offline(
                 store.add(
                     entry_title,
                     vk.key,
-                    engine="unreal",
+                    engine=target_engine,
                     notes="cracked from running process memory",
                     scheme=vk.scheme,
                     parameters=vk.parameters or None,
@@ -384,6 +549,7 @@ def crack_offline(
 
     return {
         "status": status,
+        "engine": target_engine,
         "process": exe,
         "pid": resolved_pid,
         "pak": pak_path,

@@ -30,13 +30,14 @@ def aes_sbox() -> bytes:
     return bytes(module.AES_SBOX)
 
 
-def build_pe(key_hex: str, sbox: bytes) -> bytes:
+def build_pe(key_hex: str, sbox: bytes, extra: bytes = b"") -> bytes:
     text_code = b"\xc3"  # ret
     text_vsize = 0x100
     text_raw_size = 0x200
     rdata_raw_size = 0x200
 
-    blob = key_hex.encode("ascii") + b"\x00" * 8 + sbox
+    blob = key_hex.encode("ascii") + b"\x00" * 8 + sbox + extra
+    assert len(blob) <= rdata_raw_size
 
     dos = b"MZ" + b"\x00" * 58 + struct.pack("<I", 0x40)
     coff_offset = 0x40

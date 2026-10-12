@@ -27,13 +27,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dualforge.encryption.brute import probe_pak_blocks, probe_pak_blocks_file, validate_key
+from dualforge.encryption.brute import (
+    probe_pak_blocks,
+    probe_pak_blocks_file,
+    probe_unity_blocks_file,
+    validate_key,
+)
 from dualforge.encryption.presets import PRESETS, GameScheme, guess_scheme
 from dualforge.encryption.registry import list_schemes
 from dualforge.unreal.autodetect import find_game_executable, find_install_root
 from dualforge.unreal.keys import KeyStore
-
-_HUNT_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ghidra" / "ghidra_key_finder.py"
 
 # Pak names that are usually media, not index-encrypted content (accepted only
 # as a last resort so auto-cracks validate against a real data archive).
@@ -73,13 +76,19 @@ def run_ghidra_hunt(
     binary: str,
     ghidra_home: Path,
     startup_timeout: int = 300,
+    ascii_keys: bool = False,
 ) -> tuple[int | None, str, str]:
     """Run the static Ghidra hunt, returning (returncode, stdout, json_path)."""
+    from dualforge.ghidra.manager import hunter_script_path
+
+    script = hunter_script_path()
+    if script is None:
+        raise RuntimeError("ghidra_key_finder.py was not found (source or packed build)")
     tmpdir = Path(tempfile.mkdtemp(prefix="dualforge_hunt_"))
     json_path = tmpdir / "candidates.json"
     cmd = [
         sys.executable,
-        str(_HUNT_SCRIPT),
+        str(script),
         binary,
         "--ghidra-home",
         str(ghidra_home),
@@ -89,6 +98,8 @@ def run_ghidra_hunt(
         "--startup-timeout",
         str(startup_timeout),
     ]
+    if ascii_keys:
+        cmd += ["--ascii-keys"]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     completed = subprocess.run(cmd, capture_output=True, text=True, timeout=startup_timeout + 1200, creationflags=flags)
     return completed.returncode, completed.stdout + completed.stderr, str(json_path)
@@ -103,8 +114,23 @@ def _cleanup_hunt_json(json_path: str | None) -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def extract_candidate_keys(json_path: str | None, limit: int = 64) -> list[str]:
-    """Flatten the 32-byte hex candidates from a hunt JSON result."""
+def _accepted_candidate_value(value: str, allow_ascii: bool) -> bool:
+    """A candidate worth validating: 64-hex AES, or (optionally) 16-char ASCII."""
+    if len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+        return True
+    return bool(allow_ascii and len(value) == 16 and value.isprintable())
+
+
+def extract_candidate_keys(
+    json_path: str | None, limit: int = 64, allow_ascii: bool = False
+) -> list[str]:
+    """Flatten the key candidates from a hunt JSON result.
+
+    Accepts 64-hex AES candidates and, when ``allow_ascii`` is set, 16-char
+    printable-ASCII candidates (Unity CN masks, case preserved). Optimistic
+    binary blob values are handled by the Unity runtime pass, not the static
+    hunt.
+    """
     keys: list[str] = []
     if not json_path or not Path(json_path).is_file():
         return keys
@@ -114,9 +140,11 @@ def extract_candidate_keys(json_path: str | None, limit: int = 64) -> list[str]:
         return keys
     for match in payload.get("matches", []):
         for candidate in match.get("candidates", []):
-            hexval = (candidate.get("hex") or "").strip().lower().replace("0x", "")
-            if len(hexval) == 64 and hexval not in keys:
-                keys.append(hexval)
+            raw = (candidate.get("hex") or "").strip()
+            hexval = raw.lower().replace("0x", "")
+            value = raw if candidate.get("source") == "ascii" else hexval
+            if _accepted_candidate_value(value, allow_ascii) and value not in keys:
+                keys.append(value)
         if len(keys) >= limit:
             break
     return keys
@@ -220,6 +248,163 @@ def validate_keys_against_pak(
                 )
                 break
     return verified
+
+
+# Unity asset files that can carry a CN-Pro XOR header (bundle containers +
+# serialized files). Encrypted copies have no magic bytes, so match by name too.
+_UNITY_VALIDATION_GLOBS = ("*.unity3d", "*.bundle", "*.u3d", "*.assetbundle", "*.ab", "*.assets")
+_UNITY_SERIALIZED_NAMES = ("globalgamemanagers", "globalgamemanagers.assets", "level0", "maindata")
+
+
+def find_validation_bundle(path: str) -> str:
+    """Return a Unity bundle/serialized file to validate candidate keys against."""
+    candidate = Path(path).resolve()
+    if candidate.is_file():
+        return str(candidate)
+    root = find_install_root(path)
+    best: tuple[str, int] | None = None
+    for pattern in _UNITY_VALIDATION_GLOBS:
+        try:
+            matches = list(root.rglob(pattern))
+        except OSError:
+            continue
+        for asset in matches:
+            try:
+                size = asset.stat().st_size
+            except OSError:
+                size = 0
+            entry = (str(asset), size)
+            if best is None or size > best[1]:
+                best = entry
+    for name in _UNITY_SERIALIZED_NAMES:
+        probe = root / name
+        if probe.is_file():
+            try:
+                size = probe.stat().st_size
+            except OSError:
+                size = 0
+            entry = (str(probe), size)
+            if best is None or size > best[1]:
+                best = entry
+    if best is None:
+        raise RuntimeError(f"no Unity bundle/assets found under {root}")
+    return best[0]
+
+
+def unity_probe_schemes() -> list[tuple[str, str, dict]]:
+    """Validation pipelines for Unity bundles: the CN-Pro XOR mask."""
+    return [("unity-cn", "unity-cn", {"header_bytes": "0"})]
+
+
+def validate_keys_against_unity(
+    bundle_path: str,
+    keys: list[str],
+    scheme: str | None = None,
+    count: int = 4,
+) -> list[VerifiedKey]:
+    """Return the subset of ``keys`` that decrypt a Unity bundle header.
+
+    Unity CN Pro bundles XOR their header with a fixed 16-char ASCII mask.
+    Each candidate is applied with the ``unity-cn`` pipeline and the decrypted
+    header is checked for a ``Unity*`` signature or a serialized-file header.
+    """
+    blocks = probe_unity_blocks_file(bundle_path, count=count)
+    if not blocks:
+        return []
+    if scheme:
+        probes: list[tuple[str, str, dict]] = [(scheme, scheme, {})]
+    else:
+        probes = unity_probe_schemes()
+    verified: list[VerifiedKey] = []
+    for key in dict.fromkeys(keys):
+        for probe_name, pipeline, params in probes:
+            if any(
+                validate_key(
+                    block, pipeline, key, archive_name=Path(bundle_path).name, parameters=params
+                )
+                for block in blocks
+            ):
+                verified.append(
+                    VerifiedKey(key=key, scheme=probe_name, parameters=params, game="")
+                )
+                break
+    return verified
+
+
+def crack_unity(
+    bundle_or_folder: str,
+    download: bool = True,
+    startup_timeout: int = 300,
+    ghidra_home: str | None = None,
+    save_keys: bool = True,
+    title: str | None = None,
+) -> dict:
+    """Run the full auto-crack pipeline for a Unity game and return a result dict.
+
+    Autodetects the game executable, hunts it with Ghidra (harvesting 16-char
+    ASCII masks as well as 64-hex AES candidates) and validates candidates
+    against a Unity bundle with the ``unity-cn`` scheme; verified masks are
+    saved to the key store, engine ``unity``.
+    """
+    from dualforge.ghidra.manager import ensure_ghidra, ensure_java
+
+    exe, _ranked = find_game_executable(bundle_or_folder)
+    if not exe:
+        raise RuntimeError("could not auto-detect the game executable under the given path")
+    bundle = find_validation_bundle(bundle_or_folder)
+
+    headless = ensure_ghidra(download=download, ghidra_home=ghidra_home)
+    ensure_java(download=download)
+    ghidra_root = headless.parents[1]
+
+    returncode, output, json_path = run_ghidra_hunt(exe, ghidra_root or headless, startup_timeout, ascii_keys=True)
+    if returncode != 0:
+        _cleanup_hunt_json(json_path)
+        return {
+            "status": "hunt_failed",
+            "engine": "unity",
+            "exe": exe,
+            "bundle": bundle,
+            "returncode": returncode,
+            "detail": output[-2000:],
+        }
+
+    try:
+        candidates = extract_candidate_keys(json_path, allow_ascii=True)
+    finally:
+        _cleanup_hunt_json(json_path)
+    verified_keys = validate_keys_against_unity(bundle, candidates)
+    verified = [vk.key for vk in verified_keys]
+
+    saved: list[str] = []
+    if save_keys and verified_keys:
+        store = KeyStore()
+        base_title = title or Path(exe).stem
+        for index, vk in enumerate(verified_keys, start=1):
+            entry_title = f"{base_title} [cracked-{index}]"
+            try:
+                store.add(
+                    entry_title,
+                    vk.key,
+                    engine="unity",
+                    notes="auto-cracked via Ghidra (Unity CN)",
+                    scheme=vk.scheme,
+                    parameters=vk.parameters or None,
+                )
+                saved.append(entry_title)
+            except ValueError:
+                continue
+
+    return {
+        "status": "ok" if verified else "no_valid_key",
+        "engine": "unity",
+        "exe": exe,
+        "bundle": bundle,
+        "candidates": candidates,
+        "verified": verified,
+        "verified_keys": verified_keys,
+        "saved": saved,
+    }
 
 
 def crack(

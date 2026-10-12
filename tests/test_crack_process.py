@@ -196,3 +196,69 @@ def test_crack_offline_no_pak_does_not_save(monkeypatch):
     result = cp.crack_offline(process="Game.exe", save_keys=True)
     assert result["status"] == "scan_only"
     assert result["saved"] == []
+
+
+def test_harvest_ascii_windows_preserves_case():
+    mask = b"gHjKlMnOpQrStUvW"
+    reader = FakeReader([(0x800000, mask)])
+    found = cp.harvest_ascii_windows(reader)
+    hit = next((c for c in found if c.hex_value == mask.decode()), None)
+    assert hit is not None
+    assert hit.source == "ascii-window"
+    assert hit.offset == 0x800000
+
+
+def test_detect_target_engine(tmp_path):
+    pak = tmp_path / "game.pak"
+    pak.write_bytes(b"\x00" * 8)
+    assert cp.detect_target_engine(str(pak)) == "unreal"
+
+    bundle = tmp_path / "game.unity3d"
+    bundle.write_bytes(b"\x00" * 8)
+    assert cp.detect_target_engine(str(bundle)) == "unity"
+
+    install = tmp_path / "Install"
+    (install / "Content" / "Paks").mkdir(parents=True)
+    (install / "Content" / "Paks" / "game.pak").write_bytes(b"\x00" * 8)
+    assert cp.detect_target_engine(str(install)) == "unreal"
+
+    empty = tmp_path / "Empty"
+    empty.mkdir()
+    assert cp.detect_target_engine(str(empty)) == "unity"
+    assert cp.detect_target_engine(None) == "unreal"
+
+
+def test_crack_offline_unity_validates_and_saves(monkeypatch, tmp_path):
+    mask = "gHjKlMnOpQrStUvW"
+    reader = FakeReader([(0x400000, mask.encode("ascii") + b"\x00" * 512)])
+    monkeypatch.setattr(cp, "ProcessReader", lambda pid: reader)
+    monkeypatch.setattr(cp, "resolve_process", lambda process=None, pid=None: (11, "Game.exe"))
+
+    bundle = tmp_path / "game.unity3d"
+    bundle.write_bytes(b"\x00" * 64)
+    monkeypatch.setattr("dualforge.crack.find_validation_bundle", lambda pak: str(bundle))
+
+    saved: list[dict] = []
+
+    class FakeStore:
+        def __init__(self, path=None):
+            pass
+
+        def add(self, title, keystr, engine="", notes="", scheme="aes-256", parameters=None):
+            saved.append(dict(title=title, key=keystr, engine=engine, scheme=scheme))
+
+    monkeypatch.setattr(cp, "KeyStore", FakeStore)
+    monkeypatch.setattr(
+        "dualforge.crack.validate_keys_against_unity",
+        lambda path, keys, scheme=None, count=4: [
+            VerifiedKey(key=mask, scheme="unity-cn", parameters={"header_bytes": "0"}, game="")
+        ],
+    )
+
+    result = cp.crack_offline(process="Game.exe", pak=str(bundle), engine="unity", title="Game")
+    assert result["status"] == "ok"
+    assert result["engine"] == "unity"
+    assert result["verified"] == [mask]
+    assert saved == [
+        {"title": "Game [offline-1]", "key": mask, "engine": "unity", "scheme": "unity-cn"}
+    ]

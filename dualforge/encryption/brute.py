@@ -41,6 +41,10 @@ _MOUNT_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/\\\\._- "
 )
 
+# Unity bundle container magics (a correct CN mask reveals one at the header)
+# and the low bytes of a bare serialized file (no container header).
+_UNITY_MAGICS = (b"UnityFS", b"UnityWeb", b"UnityRaw")
+
 
 def _looks_like_mount_fstring(data: bytes) -> bool:
     """True if ``data`` starts with a plausible UE mount-point FString.
@@ -64,6 +68,21 @@ def _looks_like_mount_fstring(data: bytes) -> bool:
 def _looks_decrypted_chunk(data: bytes) -> bool:
     if len(data) < 4:
         return False
+    # Unity: a correct CN mask reveals a bundle magic or a serialized-file
+    # header (8 zero bytes followed by a plausible version).
+    if len(data) >= 8:
+        for sig in _UNITY_MAGICS:
+            if data.startswith(sig):
+                return True
+        if data[:8] == b"\x00" * 8:
+            from dualforge.detector.detector import (
+                UNITY_SERIALIZED_VERSION_MIN,
+                UNITY_SERIALIZED_VERSION_MAX,
+            )
+
+            version = int.from_bytes(data[8:12], "little")
+            if UNITY_SERIALIZED_VERSION_MIN <= version <= UNITY_SERIALIZED_VERSION_MAX:
+                return True
     # Unreal usually stores a known 4-byte value at the *end* of each 16-byte
     # block when keyed. A very strong signal is that the last 4 bytes equal the
     # magic after decrypt.
@@ -149,6 +168,22 @@ def probe_pak_blocks_file(path: str, count: int = 16) -> list[bytes]:
         region = fh.read(size - trailing_start)
         blocks = _blocks_with_tail_marker(region, count)
         return blocks[:count]
+
+
+def probe_unity_blocks_file(path: str, count: int = 4) -> list[bytes]:
+    """Return aligned 16-byte blocks from the start of a Unity bundle.
+
+    Unity CN-Pro bundles XOR the *header* with the key mask and leave the
+    rest untouched, so validation must probe the first bytes. Reads only the
+    header region instead of the whole (potentially multi-hundred-MB) file.
+    """
+    size = os.path.getsize(path)
+    need = 16 * count
+    with open(path, "rb") as fh:
+        if size < 16:
+            return []
+        region = fh.read(min(need, size))
+    return _0padded_blocks(region, count)
 
 
 def _0padded_blocks(region: bytes, count: int) -> list[bytes]:

@@ -7,8 +7,11 @@ from dualforge.crack import (
     VerifiedKey,
     crack_all,
     extract_candidate_keys,
+    find_validation_bundle,
     find_validation_pak,
+    unity_probe_schemes,
     validate_keys_against_pak,
+    validate_keys_against_unity,
 )
 
 
@@ -325,3 +328,125 @@ def test_crack_all_skips_failed_hunts_and_reports_no_key(monkeypatch, tmp_path):
     assert result["status"] == "no_valid_key"
     assert result["hunt_results"][0]["status"] == "hunt_failed"
     assert result["candidates"] == []
+
+
+def _xor_mask(data: bytes, mask: str) -> bytes:
+    key = mask.encode("ascii")
+    return bytes(byte ^ key[i % len(key)] for i, byte in enumerate(data))
+
+
+def test_unity_probe_schemes_only_cn_mask():
+    assert unity_probe_schemes() == [("unity-cn", "unity-cn", {"header_bytes": "0"})]
+
+
+def test_find_validation_bundle_accepts_file(tmp_path):
+    bundle = tmp_path / "data.unity3d"
+    bundle.write_bytes(b"\x00" * 32)
+    assert find_validation_bundle(str(bundle)) == str(bundle.resolve())
+
+
+def test_find_validation_bundle_picks_largest(tmp_path):
+    small = tmp_path / "a.bundle"
+    big = tmp_path / "b.bundle"
+    small.write_bytes(b"\x00" * 16)
+    big.write_bytes(b"\x00" * 64)
+    assert find_validation_bundle(str(tmp_path)) == str(big.resolve())
+
+
+def test_extract_candidate_keys_ascii_preserves_case(tmp_path):
+    out = tmp_path / "candidates.json"
+    out.write_text(
+        json.dumps(
+            {
+                "matches": [
+                    {
+                        "candidates": [
+                            {"hex": "gHjKlMnOpQrStUvW", "source": "ascii"},
+                            {"hex": "AABB" * 16, "source": "entropy"},
+                        ]
+                    }
+                ]
+            }
+        )
+    )
+    assert extract_candidate_keys(str(out)) == ["aabb" * 16]
+    assert extract_candidate_keys(str(out), allow_ascii=True) == [
+        "gHjKlMnOpQrStUvW",
+        "aabb" * 16,
+    ]
+
+
+def test_validate_keys_against_unity_recovers_mask(monkeypatch, tmp_path):
+    mask = "gHjKlMnOpQrStUvW"
+    enc = _xor_mask(b"UnityFS" + b"\x00" * 9, mask)
+    monkeypatch.setattr(
+        "dualforge.crack.probe_unity_blocks_file", lambda path, count=4: [enc]
+    )
+    verified = validate_keys_against_unity(
+        str(tmp_path / "game.unity3d"), [mask, "ZqWmXpLrNvTbKjYh"]
+    )
+    assert [v.key for v in verified] == [mask]
+    assert verified[0].scheme == "unity-cn"
+
+
+def test_validate_keys_against_unity_no_blocks(monkeypatch, tmp_path):
+    monkeypatch.setattr("dualforge.crack.probe_unity_blocks_file", lambda path, count=4: [])
+    assert validate_keys_against_unity(str(tmp_path / "game.unity3d"), ["gHjKlMnOpQrStUvW"]) == []
+
+
+def test_crack_unity_validates_and_saves(monkeypatch, tmp_path):
+    import dualforge.crack as crack_module
+    from dualforge.crack import crack_unity
+
+    mask = "gHjKlMnOpQrStUvW"
+    enc = _xor_mask(b"UnityFS" + b"\x00" * 9, mask)
+    bundle = tmp_path / "game.unity3d"
+    bundle.write_bytes(enc + b"\x00" * 48)
+    exe = tmp_path / "Game.exe"
+    exe.write_bytes(b"MZ")
+
+    class FakeHeadless:
+        parents = ("", "")
+        name = "analyzeHeadless.bat"
+
+    saved: list[dict] = []
+
+    class FakeStore:
+        def __init__(self, path=None):
+            pass
+
+        def add(self, title, key, engine="", notes="", scheme="aes-256", parameters=None):
+            saved.append(dict(title=title, key=key, engine=engine, scheme=scheme))
+
+    monkeypatch.setattr(
+        "dualforge.ghidra.manager.ensure_ghidra",
+        lambda download=True, ghidra_home=None: FakeHeadless(),
+    )
+    monkeypatch.setattr("dualforge.ghidra.manager.ensure_java", lambda download=True: None)
+    monkeypatch.setattr(crack_module, "find_game_executable", lambda folder: (str(exe), []))
+    monkeypatch.setattr(crack_module, "find_validation_bundle", lambda folder: str(bundle))
+    monkeypatch.setattr(crack_module, "probe_unity_blocks_file", lambda path, count=4: [enc])
+    monkeypatch.setattr(
+        crack_module,
+        "run_ghidra_hunt",
+        lambda binary, ghidra_home, startup_timeout=300, ascii_keys=False: (
+            0,
+            "ok",
+            str(tmp_path / "hunt.json"),
+        ),
+    )
+    monkeypatch.setattr(
+        crack_module,
+        "extract_candidate_keys",
+        lambda path, limit=64, allow_ascii=False: [mask],
+    )
+    monkeypatch.setattr(crack_module, "KeyStore", FakeStore)
+
+    result = crack_unity(str(tmp_path), title="Game")
+    assert result["status"] == "ok"
+    assert result["engine"] == "unity"
+    assert result["verified"] == [mask]
+    assert result["saved"] == ["Game [cracked-1]"]
+    assert saved == [
+        {"title": "Game [cracked-1]", "key": mask, "engine": "unity", "scheme": "unity-cn"}
+    ]

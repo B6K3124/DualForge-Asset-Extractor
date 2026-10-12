@@ -200,3 +200,45 @@ def test_guess_scheme_abinf():
     preset = guess_scheme(mount="../../../ABInfinite/Content/", archive_name="pakchunk0-WindowsNoEditor.pak")
     assert preset is not None and preset.name == "arena-breakout"
     assert guess_scheme(game="Arena Breakout Infinite").name == "arena-breakout"
+
+
+def test_looks_decrypted_chunk_detects_unity():
+    from dualforge.encryption.brute import _looks_decrypted_chunk
+
+    assert _looks_decrypted_chunk(b"UnityFS" + b"\x00" * 8)
+    assert _looks_decrypted_chunk(b"UnityWeb" + b"\x00" * 8)
+    assert _looks_decrypted_chunk(b"UnityRaw" + b"\x00" * 8)
+    # bare serialized file: 8 zero bytes then a plausible version
+    assert _looks_decrypted_chunk(b"\x00" * 8 + (17).to_bytes(4, "little") + b"\x00" * 4)
+    # version out of the known range is not a Unity header
+    assert not _looks_decrypted_chunk(b"\x00" * 8 + (99).to_bytes(4, "little") + b"\x00" * 4)
+
+
+def test_probe_unity_blocks_file_reads_aligned_header(tmp_path):
+    from dualforge.encryption.brute import probe_unity_blocks_file
+
+    bundle = tmp_path / "game.bundle"
+    bundle.write_bytes(bytes(range(64)))
+    assert probe_unity_blocks_file(str(bundle), count=2) == [
+        bytes(range(16)),
+        bytes(range(16, 32)),
+    ]
+
+
+def test_probe_unity_blocks_file_pads_short_reads(tmp_path):
+    from dualforge.encryption.brute import probe_unity_blocks_file
+
+    bundle = tmp_path / "short.bundle"
+    bundle.write_bytes(b"UnityFS" + b"\x01" * 13)
+    blocks = probe_unity_blocks_file(str(bundle), count=2)
+    assert blocks[0] == b"UnityFS" + b"\x01" * 9
+    assert blocks[1] == b"\x01" * 4 + b"\x00" * 12
+    assert len(blocks) == 2
+
+
+def test_probe_unity_blocks_file_too_small(tmp_path):
+    from dualforge.encryption.brute import probe_unity_blocks_file
+
+    bundle = tmp_path / "empty.bundle"
+    bundle.write_bytes(b"short")
+    assert probe_unity_blocks_file(str(bundle)) == []

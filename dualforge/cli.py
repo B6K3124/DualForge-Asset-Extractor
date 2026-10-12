@@ -16,6 +16,7 @@ from dualforge.cli_commands import (
     _cmd_codecs,
     _cmd_crack_offline,
     _cmd_crack_run,
+    _cmd_crack_run_unity,
     _cmd_crack_status,
     _cmd_detect,
     _cmd_drivers_create,
@@ -387,7 +388,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--raw-windows", type=int, default=250_000,
         help="max sampled entropy windows for the whole-address-space pass (default: 250000)",
     )
+    crack_offline.add_argument(
+        "--ascii-windows", type=int, default=60_000,
+        help="max sampled printable-ASCII runs for Unity CN mask keys (default: 60000)",
+    )
+    crack_offline.add_argument(
+        "--engine", choices=["auto", "unity", "unreal"], default="auto",
+        help="validation target engine (default: auto-detect from --pak)",
+    )
+    crack_offline.add_argument(
+        "--min-candidates", type=int, default=8,
+        help="adaptive hunt relowers thresholds until at least this many unique "
+        "candidates surface (default: 8)",
+    )
     crack_offline.set_defaults(crack_handler=_cmd_crack_offline)
+    crack_unity = crack_sub.add_parser(
+        "unity",
+        help="crack a Unity CN game's mask key via Ghidra and validate against a bundle",
+        description="Hunts a Unity CN 16-char printable-ASCII mask key from the game "
+        "executable with Ghidra, then validates every candidate directly against the "
+        "Unity bundle (no pak/probing needed).",
+    )
+    crack_unity.add_argument(
+        "path", help="a Unity .assets/.bundle/.resS file or install folder",
+    )
+    crack_unity.add_argument(
+        "--no-download", action="store_true",
+        help="do not download Ghidra/JRE; fail if not already installed",
+    )
+    crack_unity.add_argument(
+        "--ghidra-home", help="explicit Ghidra install root (overrides auto-detection)",
+    )
+    crack_unity.add_argument(
+        "--startup-timeout", type=int, default=300,
+        help="seconds to wait for Ghidra to start (default: 300)",
+    )
+    crack_unity.add_argument("--title", help="title to store the cracked key under")
+    crack_unity.add_argument(
+        "--no-save", action="store_true", help="validate candidates but do not save keys",
+    )
+    crack_unity.set_defaults(crack_handler=_cmd_crack_run_unity)
 
     locres_parser = sub.add_parser(
         "locres", help="inspect and dump Unreal Engine .locres localization files",

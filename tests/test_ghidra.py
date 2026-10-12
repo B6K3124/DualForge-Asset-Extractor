@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -87,6 +89,31 @@ def test_collect_candidates_entropy_ranking_and_cap():
 def test_collect_candidates_ignores_low_entropy():
     context = (b"AB" * 1024) + (b"00" * 64) + (b"CD" * 1024)
     assert gkf.collect_candidates(context, 0) == []
+
+
+def test_collect_candidates_ascii_off_by_default():
+    mask = b"gHjKlMnOpQrStUvW"
+    assert gkf.collect_candidates(mask, 0, min_length=16, max_length=32) == []
+
+
+def test_collect_candidates_ascii_harvest_preserves_case():
+    mask = b"gHjKlMnOpQrStUvW"
+    candidates = gkf.collect_candidates(
+        mask, 0, min_length=16, max_length=32, ascii_keys=True
+    )
+    assert [c.hex_value for c in candidates] == [mask.decode("ascii")]
+    assert candidates[0].length == 16
+    assert candidates[0].source == "ascii"
+
+
+def test_build_parser_ascii_flags():
+    parser = gkf.build_parser()
+    defaults = parser.parse_args(["game.exe"])
+    assert defaults.ascii_keys is False
+    assert defaults.ascii_threshold == 3.0
+    enabled = parser.parse_args(["game.exe", "--ascii-keys", "--ascii-threshold", "2.5"])
+    assert enabled.ascii_keys is True
+    assert enabled.ascii_threshold == 2.5
 
 
 def test_scan_for_signatures_multiple_hits():
@@ -246,6 +273,18 @@ def test_find_analyze_headless_from_managed_cache(monkeypatch, tmp_path):
     assert gkf.find_analyze_headless() == headless
 
 
+def test_find_analyze_headless_prefers_bat_on_windows(monkeypatch, tmp_path):
+    support = tmp_path / "ghidra_11.3.2_PUBLIC" / "support"
+    support.mkdir(parents=True)
+    (support / "analyzeHeadless").write_text("#!/bin/sh\nexit 0\n")
+    bat = support / "analyzeHeadless.bat"
+    bat.write_text("@echo off\r\n")
+    monkeypatch.setattr(gkf, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(gkf, "_is_windows", lambda: True)
+    monkeypatch.delenv("GHIDRA_HOME", raising=False)
+    assert gkf.find_analyze_headless() == bat
+
+
 def test_find_java_from_managed_cache(monkeypatch, tmp_path):
     bin_dir = tmp_path / "jre21" / "bin"
     bin_dir.mkdir(parents=True)
@@ -349,3 +388,46 @@ def test_make_test_pe_section_table_layout():
     raw = pe[rrawptr : rrawptr + rrawsize]
     assert raw[:64].decode("ascii") == key_hex
     assert raw[72:88] == bytes(maker.aes_sbox())[:16]
+
+
+# --------------------------------------------------------------- opt-in e2e
+
+
+@pytest.mark.skipif(
+    os.environ.get("DUALFORGE_E2E_GHIDRA") != "1",
+    reason="set DUALFORGE_E2E_GHIDRA=1 to run the real-Ghidra end-to-end hunt",
+)
+def test_e2e_hunts_embedded_keys(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "dualforge_make_test_pe",
+        _REPO_ROOT / "scripts" / "ghidra" / "make_test_pe.py",
+    )
+    assert spec and spec.loader
+    maker = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = maker
+    spec.loader.exec_module(maker)
+
+    mask = "gHjKlMnOpQrStUvW"
+    key_hex = "7ae44748e21f003d2c5a999b04861a2dc3cfe1931fbb210bad96e8a71f04b9d1"
+    pe = maker.build_pe(key_hex, bytes(maker.aes_sbox()), extra=mask.encode("ascii"))
+    binary = tmp_path / "game.exe"
+    binary.write_bytes(pe)
+
+    out = tmp_path / "hunt.json"
+    args = gkf.build_parser().parse_args(
+        [
+            str(binary),
+            "--ascii-keys",
+            "--max-per-match",
+            "200",
+            "--json",
+            str(out),
+            "--no-add-keystore",
+            "--quiet",
+        ]
+    )
+    assert gkf.cmd_hunt(args) == gkf.EXIT_OK
+    result = json.loads(out.read_text(encoding="utf-8"))
+    found = {c["hex"] for match in result["matches"] for c in match["candidates"]}
+    assert key_hex in found
+    assert mask in found

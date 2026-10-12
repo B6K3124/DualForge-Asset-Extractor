@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 
+import os
+
 import pytest
 
 import dualforge.ghidra.manager as mgr
@@ -23,6 +25,18 @@ def test_find_analyze_headless_from_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr, "CACHE_ROOT", tmp_path)
     monkeypatch.delenv("GHIDRA_HOME", raising=False)
     assert mgr.find_analyze_headless() == headless
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only launcher preference")
+def test_find_analyze_headless_prefers_bat_on_windows(monkeypatch, tmp_path):
+    support = tmp_path / "ghidra_11.3.2_PUBLIC" / "support"
+    support.mkdir(parents=True)
+    (support / "analyzeHeadless").write_text("#!/bin/sh\nexit 0\n")
+    bat = support / "analyzeHeadless.bat"
+    bat.write_text("@echo off\r\n")
+    monkeypatch.setattr(mgr, "CACHE_ROOT", tmp_path)
+    monkeypatch.delenv("GHIDRA_HOME", raising=False)
+    assert mgr.find_analyze_headless() == bat
 
 
 def test_find_java_from_java_home(monkeypatch, tmp_path):

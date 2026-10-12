@@ -30,6 +30,51 @@ def _print_verified(verified_keys, label: str = "") -> None:
         print(f"{label}{key}{tag}")
 
 
+def _cmd_crack_run_unity(args: argparse.Namespace) -> int:
+    """Auto-crack a Unity CN game: hunt ASCII masks via Ghidra, validate."""
+    if not args.path:
+        print("usage: dualforge crack unity <bundle-or-folder>", file=sys.stderr)
+        return 2
+
+    from dualforge.crack import crack_unity
+
+    download = not args.no_download
+    try:
+        result = crack_unity(
+            args.path,
+            download=download,
+            startup_timeout=args.startup_timeout,
+            ghidra_home=args.ghidra_home,
+            save_keys=not args.no_save,
+            title=args.title,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"exe            : {result['exe']}")
+    print(f"validation bundle: {result['bundle']}")
+    if result["status"] == "hunt_failed":
+        print(f"Ghidra hunt failed (exit {result['returncode']})")
+        print(result["detail"][-1200:])
+        return 1
+    print(f"candidate keys : {len(result['candidates'])}")
+    verified = result["verified"]
+    print(f"verified keys  : {len(verified)}")
+    vks = result.get("verified_keys") or verified
+    _print_verified(vks)
+    if result["status"] == "ok":
+        _print_verified(vks, label="cracked mask   : ")
+        if result["saved"]:
+            print("saved to key store:", ", ".join(result["saved"]))
+        else:
+            print("(keys not saved; re-run without --no-save to persist)")
+        return 0
+    print("no candidate validated against the Unity bundle; the key may be")
+    print("runtime/session-bound (use 'dualforge crack offline --engine unity').")
+    return 1
+
+
 def _cmd_crack_offline(args: argparse.Namespace) -> int:
     """Hunt a key from a running game's memory (runtime / offline crack)."""
     if args.list_processes:
@@ -58,6 +103,9 @@ def _cmd_crack_offline(args: argparse.Namespace) -> int:
             block_count=args.block_count,
             max_candidates=args.max_candidates,
             raw_windows=args.raw_windows,
+            ascii_windows=args.ascii_windows,
+            min_candidates=args.min_candidates,
+            engine=args.engine,
             log=_log,
         )
     except (RuntimeError, ValueError) as exc:
@@ -66,6 +114,7 @@ def _cmd_crack_offline(args: argparse.Namespace) -> int:
 
     print(f"process        : {result['process']} (pid {result['pid']})")
     print(f"bytes scanned  : {result['bytes_scanned']:,}")
+    print(f"engine         : {result.get('engine', 'unreal')}")
     print(f"candidate keys : {len(result['candidates'])}")
     for match in result["matches"][:8]:
         print(f"  {match['signature']}: {match['candidate_count']} candidate(s) at {match['address']}")
@@ -85,7 +134,8 @@ def _cmd_crack_offline(args: argparse.Namespace) -> int:
             print("(keys not saved; re-run without --no-save to persist)")
         return 0
     if result["status"] == "no_key_found":
-        print("no candidate validated against the pak; try:")
+        target = result.get("engine", "unreal")
+        print(f"no candidate validated against the {target} target; try:")
         print("  - use --raw-windows <n> to widen the raw-memory sample")
         print("  - attach to a freshly started game so the key material is resident")
         print("  - pass --scheme <name> to restrict probing to one scheme")

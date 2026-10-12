@@ -187,6 +187,54 @@ def is_hex_key(value: bytes, key_length: int) -> bool:
     return True
 
 
+def _collect_ascii_keys(
+    found: dict[tuple[int, int, str], Candidate],
+    context: bytes,
+    context_offset: int,
+    max_length: int,
+    max_per_match: int,
+    threshold: float,
+) -> None:
+    """Harvest 16/32-char printable-ASCII keys (Unity CN masks etc.).
+
+    Unity CN Pro bundle keys are 16-char ASCII strings (case preserved). This
+    pass walks maximal runs of printable ASCII and records one candidate per
+    aligned window of ``key_length`` chars, keeping original case.
+    """
+    key_lengths = [kl for kl in (16, max_length) if 16 <= kl <= max_length]
+    n = len(context)
+    pos = 0
+    collected = 0
+    while pos < n:
+        byte = context[pos]
+        if not (32 <= byte < 127):
+            pos += 1
+            continue
+        end = pos
+        while end < n and 32 <= context[end] < 127:
+            end += 1
+        run = context[pos:end]
+        if len(run) >= 16:
+            for kl in key_lengths:
+                for start in range(0, len(run) - kl + 1):
+                    window = run[start : start + kl]
+                    entropy = shannon_entropy(window)
+                    if entropy < threshold:
+                        continue
+                    value = window.decode("ascii")
+                    found[kl, pos + start, "ascii"] = Candidate(
+                        hex_value=value,
+                        entropy=round(entropy, 4),
+                        length=kl,
+                        offset=context_offset + pos + start,
+                        source="ascii",
+                    )
+                    collected += 1
+                if collected >= max_per_match * 4:
+                    return
+        pos = end
+
+
 def collect_candidates(
     context: bytes,
     context_offset: int,
@@ -194,13 +242,16 @@ def collect_candidates(
     max_length: int = 32,
     threshold: float = 3.5,
     max_per_match: int = 20,
+    ascii_keys: bool = False,
+    ascii_threshold: float = 3.0,
 ) -> list[Candidate]:
     """Pull high-entropy hex key-sized windows from a context buffer.
 
     ``context_offset`` is the context's offset within the containing block.
-    Windows are sized as ``2 * key_length`` hex characters.
+    Windows are sized as ``2 * key_length`` hex characters. With ``ascii_keys``
+    set, printable-ASCII 16/32-char masks are harvested too (Unity CN keys).
     """
-    found: dict[tuple[int, int], Candidate] = {}
+    found: dict[tuple[int, int, str], Candidate] = {}
     for key_length in range(min_length, max_length + 1):
         window_size = key_length * 2
         for i in range(0, len(context) - window_size + 1):
@@ -210,13 +261,17 @@ def collect_candidates(
                 continue
             if not is_hex_key(window, key_length):
                 continue
-            found[(key_length, i)] = Candidate(
+            found[key_length, i, "hex"] = Candidate(
                 hex_value=window.decode("ascii").lower(),
                 entropy=round(entropy, 4),
                 length=key_length,
                 offset=context_offset + i,
                 source="entropy",
             )
+    if ascii_keys:
+        _collect_ascii_keys(
+            found, context, context_offset, max_length, max_per_match, ascii_threshold,
+        )
     ranked = sorted(found.values(), key=lambda c: (-c.length, c.entropy, c.offset))
     return ranked[:max_per_match]
 
@@ -249,6 +304,8 @@ def scan_memory(
     max_length: int,
     threshold: float,
     max_per_match: int,
+    ascii_keys: bool = False,
+    ascii_threshold: float = 3.0,
 ) -> list[Match]:
     """Walk every block in overlapped chunks and collect signature hits."""
     matches: list[Match] = []
@@ -276,6 +333,8 @@ def scan_memory(
                         max_length=max_length,
                         threshold=threshold,
                         max_per_match=max_per_match,
+                        ascii_keys=ascii_keys,
+                        ascii_threshold=ascii_threshold,
                     )
                 matches.append(
                     Match(
@@ -301,6 +360,8 @@ def entropy_only_scan(
     max_length: int,
     threshold: float,
     max_per_match: int,
+    ascii_keys: bool = False,
+    ascii_threshold: float = 3.0,
 ) -> list[Match]:
     """Signature-free pass: harvest high-entropy windows anywhere."""
     matches: list[Match] = []
@@ -321,6 +382,8 @@ def entropy_only_scan(
                 max_length=max_length,
                 threshold=threshold,
                 max_per_match=max_per_match,
+                ascii_keys=ascii_keys,
+                ascii_threshold=ascii_threshold,
             )
             if candidates:
                 matches.append(
@@ -395,6 +458,10 @@ def find_analyze_headless() -> Path | None:
         found = shutil.which(name)
         if found:
             candidates.append(Path(found))
+    if _is_windows():
+        # A Windows Ghidra ships both the extensionless POSIX launcher and the
+        # ``.bat`` wrapper; only the latter is runnable via CreateProcess.
+        candidates.sort(key=lambda path: 0 if path.suffix.lower() == ".bat" else 1)
     for candidate in candidates:
         if candidate.is_file():
             return candidate
@@ -714,6 +781,8 @@ def run_analysis(
     threshold: float,
     max_per_match: int,
     log: Callable[[str], None],
+    ascii_keys: bool = False,
+    ascii_threshold: float = 3.0,
 ) -> tuple[list[Match], list[MemoryBlock], int]:
     bridge = session.bridge
     if bridge is None:
@@ -763,6 +832,8 @@ def run_analysis(
             max_length,
             threshold,
             max_per_match,
+            ascii_keys,
+            ascii_threshold,
         )
     else:
         matches = scan_memory(
@@ -776,6 +847,8 @@ def run_analysis(
             max_length,
             threshold,
             max_per_match,
+            ascii_keys,
+            ascii_threshold,
         )
     total_scanned = sum(block.size for block in blocks)
     return matches, blocks, total_scanned
@@ -836,6 +909,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signature", action="append", help="custom hex byte signature, e.g. DEADBEEF (repeatable)")
     parser.add_argument("--no-signatures", action="store_true", help="skip signature scanning (entropy pass only)")
     parser.add_argument("--entropy-threshold", type=float, default=3.5, help="minimum Shannon entropy per byte (default 3.5)")
+    parser.add_argument(
+        "--ascii-keys",
+        action="store_true",
+        help="also harvest 16/32-char printable-ASCII key masks (Unity CN)",
+    )
+    parser.add_argument(
+        "--ascii-threshold",
+        type=float,
+        default=3.0,
+        help="minimum Shannon entropy for ASCII key windows (default 3.0)",
+    )
     parser.add_argument(
         "--min-length",
         type=int,
@@ -986,6 +1070,8 @@ def cmd_hunt(args: argparse.Namespace) -> int:
             args.entropy_threshold,
             args.max_per_match,
             log,
+            ascii_keys=args.ascii_keys,
+            ascii_threshold=args.ascii_threshold,
         )
     except (TimeoutError, RuntimeError) as exc:
         print(f"error: analysis failed: {exc}", file=sys.stderr)

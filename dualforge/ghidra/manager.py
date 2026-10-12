@@ -52,6 +52,22 @@ def _log(message: str) -> None:
 # ------------------------------------------------------------------ discovery
 
 
+def _pick_headless(matches) -> Path | None:
+    """Choose an ``analyzeHeadless`` launcher, preferring the Windows ``.bat``.
+
+    A Windows Ghidra ships both the extensionless POSIX launcher and the
+    ``.bat`` wrapper; only the latter is runnable via ``CreateProcess``.
+    """
+    files = [path for path in matches if path.is_file()]
+    if not files:
+        return None
+    if os.name == "nt":
+        for path in files:
+            if path.suffix.lower() == ".bat":
+                return path
+    return files[0]
+
+
 def find_analyze_headless() -> Path | None:
     """Locate an existing ``analyzeHeadless`` (env, cache, common roots, PATH).
 
@@ -67,9 +83,9 @@ def find_analyze_headless() -> Path | None:
 
     # Managed cache: any unpacked Ghidra under CACHE_ROOT.
     if CACHE_ROOT.is_dir():
-        for match in CACHE_ROOT.glob("ghidra_*/support/analyzeHeadless*"):
-            if match.is_file():
-                return match
+        pick = _pick_headless(CACHE_ROOT.glob("ghidra_*/support/analyzeHeadless*"))
+        if pick is not None:
+            return pick
 
     search_roots = [Path.cwd(), Path.home(), Path.home() / "tools", Path.home() / "Desktop"]
     if os.name == "nt":
@@ -86,11 +102,12 @@ def find_analyze_headless() -> Path | None:
         if ghidra_sub.is_dir():
             base_candidates.append(ghidra_sub)
         for root in base_candidates:
-            for match in root.glob("ghidra_*/support/analyzeHeadless*"):
-                if match.is_file():
-                    return match
+            pick = _pick_headless(root.glob("ghidra_*/support/analyzeHeadless*"))
+            if pick is not None:
+                return pick
 
-    for name in ("analyzeHeadless", "analyzeHeadless.bat"):
+    names = ("analyzeHeadless.bat", "analyzeHeadless") if os.name == "nt" else ("analyzeHeadless",)
+    for name in names:
         found = shutil.which(name)
         if found:
             p = Path(found)
@@ -260,10 +277,7 @@ def ensure_ghidra(
         # The zip's top-level dir may differ from the zip stem (GitHub Ghidra
         # zips extract to a non-dated dir). Locate analyzeHeadless by scanning
         # the cache rather than guessing the directory name.
-        for match in CACHE_ROOT.glob("*/support/analyzeHeadless*"):
-            if match.is_file():
-                return match
-        return None
+        return _pick_headless(CACHE_ROOT.glob("*/support/analyzeHeadless*"))
 
     headless = _find_unpacked_headless()
     if headless is None:
@@ -320,6 +334,42 @@ def ensure_java(
         if match.is_file():
             return str(match)
     return None
+
+
+def hunter_script_path() -> Path | None:
+    """Locate the vendored Ghidra key-finder script.
+
+    The hunter is distributed as a data file (never imported), so its path
+    differs between a source checkout (``scripts/ghidra/``) and a frozen
+    PyInstaller build (bundled under ``dualforge/ghidra/``). Probe both plus
+    ``sys._MEIPASS`` and return the first that exists.
+    """
+    package_dir = Path(__file__).resolve().parent
+    repo_root = package_dir.parent.parent
+    candidates = [
+        package_dir / "ghidra_key_finder.py",
+        repo_root / "scripts" / "ghidra" / "ghidra_key_finder.py",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "dualforge" / "ghidra" / "ghidra_key_finder.py")
+        candidates.append(Path(meipass) / "scripts" / "ghidra" / "ghidra_key_finder.py")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def hunter_server_script_path() -> Path | None:
+    """Locate the vendored Ghidra bridge-server script (see hint above)."""
+    hunter = hunter_script_path()
+    if hunter is not None:
+        server = hunter.with_name("ghidra_key_finder_server.py")
+        if server.is_file():
+            return server
+    package_dir = Path(__file__).resolve().parent
+    candidate = package_dir / "ghidra_key_finder_server.py"
+    return candidate if candidate.is_file() else None
 
 
 def toolchain_status() -> dict:
