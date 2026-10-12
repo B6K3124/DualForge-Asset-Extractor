@@ -92,7 +92,9 @@ configured in **File ▸ Settings**.
 
 - **Any format** — `.pak`, `.utoc`/`.ucas`, `.assets`, `.unity3d`, `.bundle`, and more — auto-detected by magic bytes.
 - **Encrypted archives** — multi-key AES with per-game scheme support; keys from manual entry, FModel import, or community sync.
-- **Ghidra auto-crack** — `crack run` hunts a game binary for hardcoded AES keys (portable Ghidra + Java auto-provisioned on demand), validates candidates against **every known encryption scheme**, and saves only the keys that actually decrypt a pak — tagged with the detected scheme.
+- **Ghidra auto-crack (Unreal)** — `crack run` hunts a game binary for hardcoded AES keys (portable Ghidra + Java auto-provisioned on demand), validates candidates against **every known encryption scheme**, and saves only the keys that actually decrypt a pak — tagged with the detected scheme.
+- **Ghidra auto-crack (Unity)** — `crack unity` hunts a Unity CN game's hardcoded XOR **mask key** (printable-ASCII harvest) and validates it against a real bundle, so no pak is needed.
+- **Runtime memory hunt** — `crack offline` attaches to a *running* game, scans its memory for key-sized material, and validates candidates against a pak or bundle — for keys that are session-bound and never reach disk (target Unreal or Unity with `--engine`).
 - **Unity stream files** — `.resS`, `.resource`, `.split*`, `.resA`, `.resH` loaded automatically.
 - **Texture decode** — PNG/JPG/BMP/WebP/TGA/DDS/KTX; **DDS/KTX1/KTX2 containers** decoded in pure Python (BC1–BC5, uncompressed).
 - **Cubemaps** — every face decoded and exported as its own image (6-face PNG set).
@@ -123,6 +125,7 @@ the asset tree on the left, the preview on the right, and a log dock at the bott
 | Save and reload game sessions | **File ▸ Game Profiles** |
 | Add / import / sync AES keys | **File ▸ Manage Keys** or **Settings** |
 | Find keys in a game binary | **Tools ▸ Ghidra Key Hunt** |
+| Hunt a key from a running game's memory | **Tools ▸ Offline Key Hunt (from RAM)** |
 | Auto-crack a game (hunt → validate → save) | `python main.py crack run "C:\Game"` |
 | View per-type file statistics | **View ▸ Asset Statistics** |
 | Switch dark / light theme | **View ▸ Theme** |
@@ -173,9 +176,15 @@ python main.py keys sync
 
 # Auto-crack: hunt the game binary for AES keys, validate against a real pak,
 # and save only the keys that actually decrypt it (tagged with the scheme used)
-python main.py crack run "C:\Game"                  # top-scored executable
-python main.py crack run "C:\Game" --all-binaries   # every detected executable
+python main.py crack run "C:\Game"                  # scan the top-scored executable
+python main.py crack run "C:\Game" --all-binaries   # scan every detected executable
 python main.py crack status                         # toolchain readiness
+
+# Auto-crack a Unity CN game's XOR mask key (hunt ASCII masks, validate vs a bundle)
+python main.py crack unity "C:\Game"
+
+# Runtime key hunt (no Ghidra): scan a running game's memory, validate vs a pak
+python main.py crack offline --process "Game.exe" --pak "game\Content\Paks\pakchunk0-Windows.pak"
 
 # Generate a mappings file from a running game
 python main.py usmap dump --process "Game.exe" -o game.usmap
@@ -231,6 +240,7 @@ the GUI (parsed from the bundle/serialized header or the pak footer).
 | | |
 |---|---|
 | Containers | `.assets`, `.unity3d`, `.bundle` + stream files (`.resS`, `.resource`, `.split*`, `.resA`, `.resH`) |
+| Encryption & key recovery | keys by manual entry / FModel import; Unity CN XOR **mask keys** recovered automatically — static via `crack unity` (Ghidra ASCII-mask harvest) or at runtime via `crack offline --engine unity` |
 | Engines | Unity **2017 → current (Unity 6 / 6000.x)** — UnityPy reads the serialized/asset-bundle format, which is version-agnostic; DualForge never gates on the engine build |
 | Verified | Unity 2021.3 (Raft, CarX, Tabletop Simulator) |
 
@@ -269,7 +279,8 @@ very old UE1/UE2 paks have no CUE4Parse engine and are best-effort only.
 | Oodle decompression | ✅ | ✅ | – | – | – |
 | Multi-scheme AES + custom encryption | ✅ | AES | – | – | – |
 | Generate `.usmap` from running game | ✅ | – | – | – | – |
-| Ghidra key hunt + scheme-aware auto-crack | ✅ | – | – | – | – |
+| Ghidra key hunt + scheme-aware auto-crack (Unreal & Unity) | ✅ | – | – | – | – |
+| Runtime memory key hunt (no Ghidra) | ✅ | – | – | – | – |
 | Mesh / audio / texture / text previews | ✅ | partial | ✅ | ✅ | limited |
 | Skeleton + animation export (glTF / FBX) | ✅ | ✅ | ✅ | ✅ | limited |
 | Cubemaps / VideoClips / SpriteAtlases / Animators / Avatars | ✅ | – | – | ✅ | limited |
